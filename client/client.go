@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,16 +18,8 @@ var (
 	timeout   = errors.New("the revert packet is timeout")
 )
 
-type function struct {
-	fInNum       int
-	seq          *uint64
-	safeMap      *safeMap
-	chanBytePool sync.Pool
-	bytesPool    sync.Pool
-}
-
 type Client struct {
-	funcsinfo []*function
+	funcsinfo []*funcinfo
 	addr      string          //端口号
 	waitGroup *sync.WaitGroup //等待退出
 	conn      *net.TCPConn
@@ -39,27 +30,10 @@ func NewClient(addr string, funcs []interface{}) *Client {
 	c := &Client{
 		addr:      addr,
 		waitGroup: new(sync.WaitGroup),
-		funcsinfo: make([]*function, funcSum),
+		funcsinfo: make([]*funcinfo, funcSum),
 	}
-	for i, _ := range c.funcsinfo {
-		t := reflect.TypeOf(funcs[i])
-		seq := uint64(0)
-		c.funcsinfo[i] = &function{
-			fInNum:  t.NumIn() + 2,
-			safeMap: NewSafeMap(),
-			chanBytePool: sync.Pool{
-				New: func() interface{} {
-					return make(chan []byte)
-				},
-			},
-			seq: &seq,
-			bytesPool: sync.Pool{
-				New: func() interface{} {
-					var arr [32]byte
-					return arr[:32]
-				},
-			},
-		}
+	for i := 0; i < funcSum; i++ {
+		c.funcsinfo[i] = NewFuncinfo(funcs[i])
 	}
 	return c
 }
