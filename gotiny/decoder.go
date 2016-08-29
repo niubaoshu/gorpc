@@ -2,8 +2,8 @@ package gotiny
 
 import (
 	//	"fmt"
-	"math"
 	"reflect"
+	"unsafe"
 )
 
 const (
@@ -184,7 +184,7 @@ func float64FromBits(u uint64) float64 {
 		v |= u & 0xFF
 		u >>= 8
 	}
-	return math.Float64frombits(v)
+	return *((*float64)(unsafe.Pointer(&v)))
 }
 
 func uvarint(buf []byte) (uint64, int) {

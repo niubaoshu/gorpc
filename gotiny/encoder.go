@@ -1,8 +1,8 @@
 package gotiny
 
 import (
-	"math"
 	"reflect"
+	"unsafe"
 )
 
 var ()
@@ -149,7 +149,7 @@ func (e *encoder) EncComplex(v complex128) {
 }
 
 func floatBits(f float64) uint64 {
-	u := math.Float64bits(f)
+	u := *((*uint64)(unsafe.Pointer(&f)))
 	var v uint64
 	for i := 0; i < 8; i++ {
 		v <<= 8
