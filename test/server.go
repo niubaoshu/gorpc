@@ -12,6 +12,7 @@ func main() {
 		sub,
 		printMsg,
 		add,
+		mut,
 	}
 	s := server.NewServer(":3345", funcs)
 	s.Start()
@@ -32,10 +33,17 @@ func timeout(msg string) {
 	time.Sleep(5 * time.Second)
 	fmt.Println(msg)
 }
-func add(a ...int) int {
-	var c = 0
+func add(a ...int)(c int) {
 	for i := 0; i < len(a); i++ {
 		c += a[i]
 	}
+	return c
+}
+func mut(a ...int)(c int){
+	c=1
+	for i:=0;i<len(a);i++{
+		c *=a[i]
+	}
+	fmt.Println(c)
 	return c
 }
