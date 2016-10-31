@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	MaxVarintLen64 = 10
+	maxVarintLen64 = 10
 )
 
-type decoder struct {
+type Decoder struct {
 	buff    []byte
 	offset  int
 	boolBit byte
@@ -18,11 +18,11 @@ type decoder struct {
 }
 
 //n is offset
-func NewDecoder(b []byte, n int) *decoder {
-	return &decoder{buff: b, offset: n}
+func NewDecoder(b []byte, n int) *Decoder {
+	return &Decoder{buff: b, offset: n}
 }
 
-func (d *decoder) Bytes() []byte {
+func (d *Decoder) Bytes() []byte {
 	r := d.buff[d.offset:]
 	d.buff = nil
 	d.offset = 0
@@ -31,12 +31,12 @@ func (d *decoder) Bytes() []byte {
 	return r
 }
 
-func (d *decoder) SetBuff(b []byte, n int) {
+func (d *Decoder) SetBuff(b []byte, n int) {
 	d.buff = b
 	d.offset = n
 }
 
-func (d *decoder) Decodes(is ...interface{}) {
+func (d *Decoder) Decodes(is ...interface{}) {
 	var v reflect.Value
 	for _, i := range is {
 		v = reflect.ValueOf(i)
@@ -47,13 +47,13 @@ func (d *decoder) Decodes(is ...interface{}) {
 	}
 }
 
-func (d *decoder) DecodeByType(t reflect.Type) (v reflect.Value) {
+func (d *Decoder) DecodeByType(t reflect.Type) (v reflect.Value) {
 	v = reflect.New(t).Elem()
 	d.DecodeValue(v)
 	return
 }
 
-func (d *decoder) DecodeByTypes(ts ...reflect.Type) (vs []reflect.Value) {
+func (d *Decoder) DecodeByTypes(ts ...reflect.Type) (vs []reflect.Value) {
 	vs = make([]reflect.Value, len(ts))
 	for i, t := range ts {
 		vs[i] = d.DecodeByType(t)
@@ -61,7 +61,7 @@ func (d *decoder) DecodeByTypes(ts ...reflect.Type) (vs []reflect.Value) {
 	return
 }
 
-func (d *decoder) DecodeValue(v reflect.Value) {
+func (d *Decoder) DecodeValue(v reflect.Value) {
 	switch v.Kind() {
 	case reflect.Bool:
 		v.SetBool(d.DecBool())
@@ -133,7 +133,7 @@ func (d *decoder) DecodeValue(v reflect.Value) {
 	}
 }
 
-func (d *decoder) DecBool() bool {
+func (d *Decoder) DecBool() bool {
 	if d.boolBit == 0 {
 		d.boolBit = 1
 		d.boolen = d.buff[d.offset]
@@ -145,33 +145,33 @@ func (d *decoder) DecBool() bool {
 	return d.boolen&d.boolBit != 0
 }
 
-func (d *decoder) DecUint8() uint8 {
+func (d *Decoder) DecUint8() uint8 {
 	d.offset++
 	return d.buff[d.offset-1]
 }
 
-func (d *decoder) DecInt8() int8 {
+func (d *Decoder) DecInt8() int8 {
 	d.offset++
 	return int8(d.buff[d.offset-1])
 }
 
-func (d *decoder) DecUint() uint64 {
+func (d *Decoder) DecUint() uint64 {
 	u, n := uvarint(d.buff[d.offset:])
 	d.offset += n
 	return u
 }
 
-func (d *decoder) DecInt() int64 {
+func (d *Decoder) DecInt() int64 {
 	i, n := varint(d.buff[d.offset:])
 	d.offset += n
 	return i
 }
 
-func (d *decoder) DecFloat() float64 {
+func (d *Decoder) DecFloat() float64 {
 	return float64FromBits(d.DecUint())
 }
 
-func (d *decoder) DecComplex() complex128 {
+func (d *Decoder) DecComplex() complex128 {
 	real := float64FromBits(d.DecUint())
 	imag := float64FromBits(d.DecUint())
 	return complex(real, imag)

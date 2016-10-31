@@ -7,29 +7,29 @@ import (
 
 var ()
 
-type encoder struct {
+type Encoder struct {
 	buff    []byte
 	boolBit byte
 	boolPos int
 	byte10  [10]byte
 }
 
-func NewEncoder(b []byte, n int) *encoder {
-	return &encoder{buff: b[:n]}
+func NewEncoder(b []byte, n int) *Encoder {
+	return &Encoder{buff: b[:n]}
 }
 
-func (e *encoder) Bytes() []byte {
+func (e *Encoder) Bytes() []byte {
 	r := e.buff
 	e.buff = nil
 	e.boolBit = 0
 	e.boolPos = 0
 	return r
 }
-func (e *encoder) SetBuff(b []byte, n int) {
+func (e *Encoder) SetBuff(b []byte, n int) {
 	e.buff = b[:n]
 }
 
-func (e *encoder) Encodes(in ...interface{}) {
+func (e *Encoder) Encodes(in ...interface{}) {
 	var v reflect.Value
 	for i := 0; i < len(in); i++ {
 		v = reflect.ValueOf(in[i])
@@ -40,13 +40,13 @@ func (e *encoder) Encodes(in ...interface{}) {
 	}
 }
 
-func (e *encoder) EncodeValues(vs ...reflect.Value) {
+func (e *Encoder) EncodeValues(vs ...reflect.Value) {
 	for i := 0; i < len(vs); i++ {
 		e.EncodeValue(vs[i])
 	}
 }
 
-func (e *encoder) EncodeValue(v reflect.Value) {
+func (e *Encoder) EncodeValue(v reflect.Value) {
 	switch v.Kind() {
 	case reflect.Bool:
 		e.EncBool(v.Bool())
@@ -111,7 +111,7 @@ func (e *encoder) EncodeValue(v reflect.Value) {
 	}
 }
 
-func (e *encoder) EncBool(v bool) {
+func (e *Encoder) EncBool(v bool) {
 	if e.boolBit == 0 {
 		e.boolBit = 1
 		e.boolPos = len(e.buff)
@@ -123,27 +123,27 @@ func (e *encoder) EncBool(v bool) {
 	e.boolBit <<= 1
 }
 
-func (e *encoder) EncUint8(v uint8) {
+func (e *Encoder) EncUint8(v uint8) {
 	e.buff = append(e.buff, v)
 }
 
-func (e *encoder) EncInt8(v int8) {
+func (e *Encoder) EncInt8(v int8) {
 	e.buff = append(e.buff, uint8(v))
 }
 
-func (e *encoder) EncUint(v uint64) {
+func (e *Encoder) EncUint(v uint64) {
 	e.buff = append(e.buff, e.byte10[:putUvarint(e.byte10[:10], v)]...)
 }
 
-func (e *encoder) EncInt(v int64) {
+func (e *Encoder) EncInt(v int64) {
 	e.buff = append(e.buff, e.byte10[:putVarint(e.byte10[:10], v)]...)
 }
 
-func (e *encoder) EncFloat(v float64) {
+func (e *Encoder) EncFloat(v float64) {
 	e.EncUint(floatBits(v))
 }
 
-func (e *encoder) EncComplex(v complex128) {
+func (e *Encoder) EncComplex(v complex128) {
 	e.EncFloat(real(v))
 	e.EncFloat(imag(v))
 }
