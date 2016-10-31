@@ -18,6 +18,7 @@ func main() {
 		sub,
 		printMsg,
 		add,
+		mut,
 	}
 	wait := new(sync.WaitGroup)
 	cli = client.NewClient("127.0.0.1:3345", funcs)
@@ -63,6 +64,17 @@ func main() {
 						//	fmt.Println("1+2+3+4+5+6+7+8+9+10=", r)
 					}
 				}
+				r, err = mut(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+				if err != nil {
+					fmt.Println(err.Error())
+				} else {
+					if r != 55 {
+						fmt.Println("55错了。", r)
+					} else {
+						//	fmt.Println("1+2+3+4+5+6+7+8+9+10=", r)
+					}
+				}
+
 			}
 			wait.Done()
 		}()
@@ -103,5 +115,9 @@ func printMsg(msg string) (err error) {
 
 func add(a ...int) (c int, err error) {
 	err = cli.RemoteCall(uint64(3), 0, &a, &c)
+	return
+}
+func mut(a ...int) (c int, err error) {
+	err = cli.RemoteCall(uint64(4), 0, &a, &c)
 	return
 }
