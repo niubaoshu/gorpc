@@ -20,8 +20,8 @@ var (
 
 type Client struct {
 	funcsinfo []*funcinfo
-	addr      string          //端口号
-	waitGroup *sync.WaitGroup //等待退出
+	addr      string         //端口号
+	waitGroup sync.WaitGroup //等待退出
 	conn      *net.TCPConn
 }
 
@@ -29,31 +29,35 @@ func NewClient(addr string, funcs []interface{}) *Client {
 	funcSum := len(funcs)
 	c := &Client{
 		addr:      addr,
-		waitGroup: new(sync.WaitGroup),
 		funcsinfo: make([]*funcinfo, funcSum),
 	}
 	for i := 0; i < funcSum; i++ {
 		c.funcsinfo[i] = NewFuncinfo(funcs[i])
 	}
+
 	return c
 }
 
-func (c *Client) Start() {
-	perLength := []byte{0x00, 0x00}
+func (c *Client) Start() error {
 	addr, err := net.ResolveTCPAddr("tcp", c.addr)
 	if err != nil {
 		log.Fatalln("地址解析失败", c.addr, err.Error())
+		return err
 	}
 	c.conn, err = net.DialTCP("tcp", nil, addr)
 	if err != nil {
 		log.Fatalln("链接失败", c.conn.RemoteAddr(), err.Error())
+		return err
 	} else {
 		log.Println("连接成功", c.conn.RemoteAddr())
 	}
-	var n int
-	var packet []byte
 
 	go func() {
+		var n int
+		var err error
+
+		var packet []byte
+		perLength := []byte{0x00, 0x00}
 		d := gotiny.NewDecoder(perLength, 0)
 		conn := bufio.NewReader(c.conn)
 		for {
@@ -81,7 +85,7 @@ func (c *Client) Start() {
 			cha <- d.Bytes()
 		}
 	}()
-
+	return nil
 	//go utils.NewConsume(&Conn{exitChan: c.exitChan, conn: c.conn}, &ClientHandler{conn: c.conn, c: c}, 100, 400, c.waitGroup).Start()
 }
 
