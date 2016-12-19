@@ -1,7 +1,6 @@
 package gotiny
 
 import (
-	//	"fmt"
 	"reflect"
 	"unsafe"
 )
@@ -10,30 +9,34 @@ const (
 	maxVarintLen64 = 10
 )
 
+var (
+	RNil = reflect.ValueOf(nil)
+)
+
 type Decoder struct {
-	buff    []byte
+	buf     []byte
 	offset  int
 	boolBit byte
 	boolen  byte
 }
 
 //n is offset
-func NewDecoder(b []byte, n int) *Decoder {
-	return &Decoder{buff: b, offset: n}
+func NewDecoder(b []byte) *Decoder {
+	return &Decoder{buf: b}
 }
 
-func (d *Decoder) Bytes() []byte {
-	r := d.buff[d.offset:]
-	d.buff = nil
+func (d *Decoder) GetUnusedBytes() []byte {
+	return d.buf[d.offset:]
+}
+
+func (d *Decoder) Reset() {
 	d.offset = 0
 	d.boolen = 0
 	d.boolBit = 0
-	return r
 }
 
-func (d *Decoder) SetBuff(b []byte, n int) {
-	d.buff = b
-	d.offset = n
+func (d *Decoder) ResetWith(b []byte) {
+	*d = Decoder{buf: b}
 }
 
 func (d *Decoder) Decodes(is ...interface{}) {
@@ -69,100 +72,112 @@ func (d *Decoder) DecodeValue(v reflect.Value) {
 		v.SetUint(uint64(d.DecUint8()))
 	case reflect.Int8:
 		v.SetInt(int64(d.DecInt8()))
-	case reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint, reflect.Uintptr:
+	case reflect.Uint, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		v.SetUint(d.DecUint())
-	case reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int:
+	case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
 		v.SetInt(d.DecInt())
 	case reflect.Float32, reflect.Float64:
 		v.SetFloat(d.DecFloat())
 	case reflect.Complex64, reflect.Complex128:
 		v.SetComplex(d.DecComplex())
+	case reflect.String:
+		v.SetString(d.DecString())
 	case reflect.Array:
 		for i := 0; i < v.Len(); i++ {
 			d.DecodeValue(v.Index(i))
 		}
 	case reflect.Map:
-		l := int(d.DecUint())
-		va := reflect.MakeMap(v.Type())
-		kt := v.Type().Key()
-		vt := v.Type().Elem()
-		for i := 0; i < l; i++ {
-			key := reflect.New(kt).Elem()
-			value := reflect.New(vt).Elem()
-			d.DecodeValue(key)
-			d.DecodeValue(value)
-			va.SetMapIndex(key, value)
-		}
-		v.Set(va)
-	case reflect.Ptr:
-		// ev := reflect.New(v.Type().Elem()).Elem()
-		// d.DecodeValue(ev)
-		if v.IsNil() {
-			v.Set(reflect.New(v.Type().Elem()))
-		}
-		d.DecodeValue(v.Elem())
-	case reflect.Slice:
-		l := int(d.DecUint())
-		c := int(d.DecUint())
-		et := v.Type().Elem()
-		va := reflect.MakeSlice(v.Type(), l, c)
-		for i := 0; i < l; i++ {
-			elem := reflect.New(et).Elem()
-			d.DecodeValue(elem)
-			va.Index(i).Set(elem)
-		}
-		if l != 0 {
-			v.Set(va)
-		}
-	case reflect.String:
-		l := int(d.DecUint())
-		v.SetString(string(d.buff[d.offset : d.offset+l]))
-		d.offset += l
-	case reflect.Struct:
-		vt := v.Type()
-		for i := 0; i < vt.NumField(); i++ {
-			if vt.Field(i).PkgPath == "" { //导出字段
-				//ft := vt.Field(i).Type
-				//fv := reflect.New(ft).Elem()
-				d.DecodeValue(v.Field(i))
-				//v.Field(i).Set(fv)
+		if d.DecBool() {
+			l := int(d.DecUint())
+			if v.IsNil() {
+				v.Set(reflect.MakeMap(v.Type()))
+			}
+			t := v.Type()
+			kt, vt := t.Key(), t.Elem()
+			for i := 0; i < l; i++ {
+				key, val := reflect.New(kt).Elem(), reflect.New(vt).Elem()
+				d.DecodeValue(key)
+				d.DecodeValue(val)
+				v.SetMapIndex(key, val)
+			}
+		} else {
+			if !v.IsNil() {
+				v.Set(reflect.New(v.Type()).Elem())
 			}
 		}
-	case reflect.Chan, reflect.Func, reflect.Interface:
+	case reflect.Ptr:
+		if d.DecBool() {
+			if v.IsNil() {
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			d.DecodeValue(v.Elem())
+		} else {
+			if !v.IsNil() {
+				v.Set(reflect.New(v.Type()).Elem())
+			}
+		}
+	case reflect.Slice:
+		if d.DecBool() {
+			l := int(d.DecUint())
+			if l == 0 || v.Cap() < l {
+				v.Set(reflect.MakeSlice(v.Type(), l, l))
+			}
+			et := v.Type().Elem()
+			for i := 0; i < l; i++ {
+				elem := reflect.New(et).Elem()
+				d.DecodeValue(elem)
+				v.Index(i).Set(elem)
+			}
+			v.Set(v.Slice(0, l))
+		} else {
+			if !v.IsNil() {
+				//v.Set(reflect.NewAt(v.Type(), unsafe.Pointer(uintptr(0))).Elem())
+				v.Set(reflect.New(v.Type()).Elem())
+			}
+		}
+	case reflect.Struct:
+		fl := v.NumField()
+		for i := 0; i < fl; i++ {
+			fv := v.Field(i)
+			if fv.CanSet() { //导出字段
+				d.DecodeValue(fv)
+			} else {
+				d.DecodeValue(reflect.NewAt(fv.Type(), unsafe.Pointer(fv.UnsafeAddr())).Elem())
+			}
+		}
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Invalid:
 		//panic("暂不支持这些类型")
 	}
 }
 
-func (d *Decoder) DecBool() bool {
+func (d *Decoder) DecBool() (b bool) {
 	if d.boolBit == 0 {
 		d.boolBit = 1
-		d.boolen = d.buff[d.offset]
+		d.boolen = d.buf[d.offset]
 		d.offset++
 	}
-	defer func() {
-		d.boolBit <<= 1
-	}()
-	return d.boolen&d.boolBit != 0
+	b = d.boolen&d.boolBit != 0
+	d.boolBit <<= 1
+	return
 }
 
 func (d *Decoder) DecUint8() uint8 {
 	d.offset++
-	return d.buff[d.offset-1]
+	return d.buf[d.offset-1]
 }
 
 func (d *Decoder) DecInt8() int8 {
-	d.offset++
-	return int8(d.buff[d.offset-1])
+	return int8(d.DecUint8())
 }
 
 func (d *Decoder) DecUint() uint64 {
-	u, n := uvarint(d.buff[d.offset:])
+	u, n := uvarint(d.buf[d.offset:])
 	d.offset += n
 	return u
 }
 
 func (d *Decoder) DecInt() int64 {
-	i, n := varint(d.buff[d.offset:])
+	i, n := varint(d.buf[d.offset:])
 	d.offset += n
 	return i
 }
@@ -175,6 +190,13 @@ func (d *Decoder) DecComplex() complex128 {
 	real := float64FromBits(d.DecUint())
 	imag := float64FromBits(d.DecUint())
 	return complex(real, imag)
+}
+
+func (d *Decoder) DecString() string {
+	l := int(d.DecUint())
+	s := string(d.buf[d.offset : d.offset+l])
+	d.offset += l
+	return s
 }
 
 func float64FromBits(u uint64) float64 {
