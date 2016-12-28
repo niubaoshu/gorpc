@@ -2,8 +2,13 @@ package main
 
 import (
 	"github.com/niubaoshu/gorpc/server"
+    "flag"
+    "runtime/pprof"
+    "os"
+    "log"
 	"time"
 )
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 func main() {
 	funcs := []interface{}{
@@ -14,6 +19,17 @@ func main() {
 		mut,
 		slow,
 	}
+    flag.Parse()
+    if *cpuprofile != "" {
+                f, err := os.Create(*cpuprofile)
+                if err != nil {
+                                log.Fatal(err)
+                                        
+                }
+                        pprof.StartCPUProfile(f)
+                                defer pprof.StopCPUProfile()
+                                    
+    }
 	server.NewServer(":3345", funcs).Start()
 }
 

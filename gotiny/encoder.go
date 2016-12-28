@@ -2,7 +2,6 @@ package gotiny
 
 import (
 	"reflect"
-	"unsafe"
 )
 
 type Encoder struct {
@@ -126,45 +125,28 @@ func (e *Encoder) EncInt8(v int8) {
 }
 
 func (e *Encoder) EncUint(v uint64) {
-	i := 0
+	buf := e.buf
 	for v >= 0x80 {
-		e.buf = append(e.buf, byte(v)|0x80)
+		buf = append(buf, uint8(v)|0x80)
 		v >>= 7
-		i++
 	}
-	e.buf = append(e.buf, byte(v))
+	e.buf = append(buf, uint8(v))
 }
 
-//int -5 -4 -3 -2 -1 0 1 2 3 4 5 6
-//uint 9  7  5  3  1 0 2 4 6 8 10 12
 func (e *Encoder) EncInt(v int64) {
-	x := uint64(v) << 1
-	if v < 0 {
-		x = ^x
-	}
-	e.EncUint(x)
+	e.EncUint(intToUint(v))
 }
 
 func (e *Encoder) EncFloat(v float64) {
-	e.EncUint(floatBits(v))
+	e.EncUint(floatToUint(v))
 }
 
 func (e *Encoder) EncComplex(v complex128) {
 	e.EncFloat(real(v))
 	e.EncFloat(imag(v))
 }
+
 func (e *Encoder) EncString(v string) {
 	e.EncUint(uint64(len(v)))
 	e.buf = append(e.buf, v...)
-}
-
-func floatBits(f float64) uint64 {
-	u := *((*uint64)(unsafe.Pointer(&f)))
-	var v uint64
-	for i := 0; i < 8; i++ {
-		v <<= 8
-		v |= u & 0xFF
-		u >>= 8
-	}
-	return v
 }

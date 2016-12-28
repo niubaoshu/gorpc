@@ -1,6 +1,7 @@
 package gotiny
 
 import (
+	//	"fmt"
 	"reflect"
 	"unsafe"
 )
@@ -106,15 +107,12 @@ func (d *Decoder) DecodeValue(v reflect.Value) {
 			}
 		}
 	case reflect.Ptr:
-		if d.DecBool() {
-			if v.IsNil() {
-				v.Set(reflect.New(v.Type().Elem()))
-			}
+		isNotNil := d.DecBool()
+		if isNotNil == v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+		if isNotNil {
 			d.DecodeValue(v.Elem())
-		} else {
-			if !v.IsNil() {
-				v.Set(reflect.New(v.Type()).Elem())
-			}
 		}
 	case reflect.Slice:
 		if d.DecBool() {
@@ -136,8 +134,8 @@ func (d *Decoder) DecodeValue(v reflect.Value) {
 			}
 		}
 	case reflect.Struct:
-		fl := v.NumField()
-		for i := 0; i < fl; i++ {
+		nf := v.NumField()
+		for i := 0; i < nf; i++ {
 			fv := v.Field(i)
 			if fv.CanSet() { //导出字段
 				d.DecodeValue(fv)
@@ -171,75 +169,103 @@ func (d *Decoder) DecInt8() int8 {
 }
 
 func (d *Decoder) DecUint() uint64 {
-	u, n := uvarint(d.buf[d.offset:])
-	d.offset += n
-	return u
+	buf, i := d.buf, d.offset
+	if buf[i] < 0x80 {
+		d.offset++
+		return uint64(buf[i])
+	}
+	// we already checked the first byte
+	x := uint64(buf[i]) - 0x80
+	i++
+
+	b := uint64(buf[i])
+	i++
+
+	x += b << 7
+	if b&0x80 == 0 {
+		goto done
+	}
+	x -= 0x80 << 7
+
+	b = uint64(buf[i])
+	i++
+	x += b << 14
+	if b&0x80 == 0 {
+		goto done
+	}
+	x -= 0x80 << 14
+
+	b = uint64(buf[i])
+	i++
+	x += b << 21
+	if b&0x80 == 0 {
+		goto done
+	}
+	x -= 0x80 << 21
+
+	b = uint64(buf[i])
+	i++
+	x += b << 28
+	if b&0x80 == 0 {
+		goto done
+	}
+	x -= 0x80 << 28
+
+	b = uint64(buf[i])
+	i++
+	x += b << 35
+	if b&0x80 == 0 {
+		goto done
+	}
+	x -= 0x80 << 35
+
+	b = uint64(buf[i])
+	i++
+	x += b << 42
+	if b&0x80 == 0 {
+		goto done
+	}
+	x -= 0x80 << 42
+
+	b = uint64(buf[i])
+	i++
+	x += b << 49
+	if b&0x80 == 0 {
+		goto done
+	}
+	x -= 0x80 << 49
+
+	b = uint64(buf[i])
+	i++
+	x += b << 56
+	if b&0x80 == 0 {
+		goto done
+	}
+	x -= 0x80 << 56
+
+	b = uint64(buf[i])
+	i++
+	x += b << 63
+done:
+	d.offset = i
+	return x
 }
 
 func (d *Decoder) DecInt() int64 {
-	i, n := varint(d.buf[d.offset:])
-	d.offset += n
-	return i
+	return uintToInt(d.DecUint())
 }
 
 func (d *Decoder) DecFloat() float64 {
-	return float64FromBits(d.DecUint())
+	return uintToFloat(d.DecUint())
 }
 
 func (d *Decoder) DecComplex() complex128 {
-	real := float64FromBits(d.DecUint())
-	imag := float64FromBits(d.DecUint())
-	return complex(real, imag)
+	return complex(uintToFloat(d.DecUint()), uintToFloat(d.DecUint()))
 }
 
-func (d *Decoder) DecString() string {
+func (d *Decoder) DecString() (s string) {
 	l := int(d.DecUint())
-	s := string(d.buf[d.offset : d.offset+l])
+	s = string(d.buf[d.offset : d.offset+l])
 	d.offset += l
-	return s
+	return
 }
-
-func float64FromBits(u uint64) float64 {
-	var v uint64
-	for i := 0; i < 8; i++ {
-		v <<= 8
-		v |= u & 0xFF
-		u >>= 8
-	}
-	return *((*float64)(unsafe.Pointer(&v)))
-}
-
-func uvarint(buf []byte) (uint64, int) {
-	var x uint64
-	var s uint
-	for i, b := range buf {
-		if b < 0x80 {
-			if i > 9 || i == 9 && b > 1 {
-				return 0, -(i + 1) // overflow
-			}
-			return x | uint64(b)<<s, i + 1
-		}
-		x |= uint64(b&0x7f) << s
-		s += 7
-	}
-	return 0, 0
-}
-
-func varint(buf []byte) (int64, int) {
-	ux, n := uvarint(buf) // ok to continue in presence of error
-	x := int64(ux >> 1)
-	if ux&1 != 0 {
-		x = ^x
-	}
-	return x, n
-}
-
-// func decAlloc(v reflect.Value) reflect.Value {
-// 	for v.Kind() == reflect.Ptr {
-// 		if v.IsNil() {
-// 			v.Set(reflect.New(v.Type().Elem()))
-// 		}
-// 		v = v.Elem()
-// 	}
-// 	return v
-// }

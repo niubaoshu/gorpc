@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"math/rand"
 	"reflect"
 	"testing"
 	"time"
@@ -46,11 +47,15 @@ var (
 		int16(-12345),
 		int32(123456),
 		int64(-1234567),
+		int64(1<<63 - 1),
+		int64(rand.Int63()),
 		uint(123),
 		uint8(123),
 		uint16(12345),
 		uint32(123456),
 		uint64(1234567),
+		uint64(1<<64 - 1),
+		uint64(rand.Uint32() * rand.Uint32()),
 		uintptr(12345678),
 		float32(1.2345),
 		float64(1.2345678),
@@ -102,26 +107,28 @@ var (
 )
 
 func init() {
+
+	//fmt.Println(now)
 	for i := 0; i < len(vs); i++ {
 		rtypes[i] = reflect.TypeOf(vs[i])
 		rvalues[i] = reflect.ValueOf(vs[i])
 
-		if i == len(vs)-2 {
-			a := make([]byte, 5)
-			vp := reflect.ValueOf(&a)
-			results[i] = vp.Elem()
-			presults[i] = vp.Interface()
-		} else if i == len(vs)-1 {
-			//a := map[int]int{111: 233, 6: 7}
-			a := map[int]int{}
-			vp := reflect.ValueOf(&a)
-			results[i] = vp.Elem()
-			presults[i] = vp.Interface()
-		} else {
-			vp := reflect.New(rtypes[i])
-			results[i] = vp.Elem()
-			presults[i] = vp.Interface()
-		}
+		// if i == len(vs)-2 {
+		// 	a := make([]byte, 5)
+		// 	vp := reflect.ValueOf(&a)
+		// 	results[i] = vp.Elem()
+		// 	presults[i] = vp.Interface()
+		// } else if i == len(vs)-1 {
+		// 	//a := map[int]int{111: 233, 6: 7}
+		// 	a := map[int]int{}
+		// 	vp := reflect.ValueOf(&a)
+		// 	results[i] = vp.Elem()
+		// 	presults[i] = vp.Interface()
+		// } else {
+		vp := reflect.New(rtypes[i])
+		results[i] = vp.Elem()
+		presults[i] = vp.Interface()
+		//}
 	}
 
 	bb := make([]byte, 0, 1024)
@@ -136,6 +143,7 @@ func init() {
 	// 	enc.Encode(vs[i])
 	// }
 	// fmt.Println("stdgob length:", len(network.Bytes()))
+
 }
 
 // Test basic operations in a safe manner.
@@ -143,32 +151,27 @@ func TestBasicEncoderDecoder(t *testing.T) {
 	e.Encodes(vs...)
 	b := e.Bytes()
 	d.ResetWith(b)
-	t.Log(b)
-	//for i := 0; i < 1000; i++ {
+	t.Logf("%v", b)
+	fmt.Printf("%v\n", b)
 	d.Decodes(presults...)
-	d.Reset()
-	//}
 	for i, result := range results {
-		//t.Logf("%T: expected %v got %v ,%T", vs[i], vs[i], result.Interface(), result.Interface())
-		if !reflect.DeepEqual(vs[i], result.Interface()) {
-			t.Fatalf("%T: expected %#v got %#v ,%T", vs[i], vs[i], result.Interface(), result.Interface())
+		r := result.Interface()
+		//fmt.Printf("%T: expected %v got %v ,%T\n", vs[i], vs[i], r, r)
+		if !reflect.DeepEqual(vs[i], r) {
+			t.Fatalf("%T: expected %#v got %#v ,%T\n", vs[i], vs[i], r, r)
 		}
 	}
 
-	//e.SetBuff(b, 0)
-	//e.ResetWith(b)
 	e.Reset()
 	e.EncodeValues(rvalues...)
-	//t.Log(e.Bytes())
-	//d.SetBuff(b, 0)
-	//t.Log(b)
 
 	d.ResetWith(e.Bytes())
 	rs := d.DecodeByTypes(rtypes...)
 	for i, result := range rs {
-		//t.Logf("%T: expected %v got %v ,%T", vs[i], vs[i], result.Interface(), result.Interface())
+		r := result.Interface()
+		//fmt.Printf("%T: expected %v got %v ,%T\n", vs[i], vs[i], r, r)
 		if !reflect.DeepEqual(vs[i], result.Interface()) {
-			t.Fatalf("%T: expected %#v got %#v ,%T", vs[i], vs[i], result.Interface(), result.Interface())
+			t.Fatalf("%T: expected %#v got %#v ,%T\n", vs[i], vs[i], r, r)
 		}
 	}
 }
@@ -196,11 +199,10 @@ func TestBasicEncoderDecoder(t *testing.T) {
 // 		}
 // 	}
 // }
-
 func BenchmarkEncodes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		for i := 0; i < 1000; i++ {
-			//e.Reset()
+			e.Reset()
 			e.Encodes(vs...)
 		}
 	}
@@ -210,8 +212,49 @@ func BenchmarkDecodes(b *testing.B) {
 	d.ResetWith(e.Bytes())
 	for i := 0; i < b.N; i++ {
 		for i := 0; i < 1000; i++ {
-			//d.Reset()
+			d.Reset()
 			d.Decodes(presults...)
 		}
+	}
+}
+
+func BenchmarkFloatToUint(b *testing.B) {
+	var f = 1.0
+	for i := 0; i < b.N; i++ {
+		floatToUint(f)
+	}
+}
+func BenchmarkIntToUint(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		intToUint(1)
+	}
+}
+
+var (
+	beeeuf    = make([]byte, 0, 10240000000)
+	dd        *Decoder
+	ee        = NewEncoder(beeeuf)
+	maxuint64 = uint64(1<<64 - 1)
+)
+
+func BenchmarkEncUint(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		ee.EncUint(maxuint64)
+	}
+}
+
+func BenchmarkEncUint2(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		ee.EncUint(maxuint64)
+	}
+}
+
+func BenchmarkDecUint(b *testing.B) {
+	b.StopTimer()
+	dd = NewDecoder(ee.Bytes())
+	dd.Reset()
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		dd.DecUint()
 	}
 }
