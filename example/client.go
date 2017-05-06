@@ -13,16 +13,17 @@ var (
 	fns [6]*gorpc.Function
 )
 
+// 该文件是自动生成的（除了main函数），还没有实现
 func main() {
 	cli := gorpc.NewClient(fns[:], plus, sub, echo, add, mut, slow)
 	cli.Start()
 	start := time.Now()
 	for i := 0; i < 1; i++ {
-		go plus(i, i*i)
-		go sub(i, i*i)
-		go echo("sdfsdfsdf")
-		go add(i)
-		go mut(i)
+		plus(i, i*i)
+		sub(i, i*i)
+		echo("sdfsdfsdf")
+		add(i)
+		mut(i)
 	}
 	cli.Stop()
 	fmt.Println(time.Now().Sub(start))

@@ -118,14 +118,15 @@ func (s *server) Start() {
 		log.Fatalln("监听端口失败", s.addr, err.Error())
 	}
 	defer listener.Close()
+	go func() {
+		<-s.exitChan
+		log.Println("Get Stop Command. Now Stoping...")
+		if err = listener.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
 	log.Println("监听地址", s.addr, "成功")
 	for {
-		select {
-		case <-s.exitChan:
-			return
-		default:
-		}
-		//	listener.SetDeadline(<-time.Tick(time.Second))
 		if conn, err := listener.AcceptTCP(); err == nil {
 			log.Println("收到连接", conn.RemoteAddr())
 			go func() {
@@ -144,9 +145,4 @@ func (s *server) Start() {
 func (s *server) Stop() {
 	close(s.exitChan)
 	s.waitGroup.Wait()
-}
-
-type serverHandler struct {
-	svr  *server
-	conn *net.TCPConn
 }

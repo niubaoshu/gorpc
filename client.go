@@ -41,10 +41,10 @@ type (
 		*safeMap
 	}
 	ccall struct {
-		enc *gotiny.Encoder
-		dec *gotiny.Decoder
-		ch  chan []byte
-		timer
+		enc   *gotiny.Encoder
+		dec   *gotiny.Decoder
+		ch    chan []byte
+		timer *time.Timer
 	}
 )
 
@@ -68,16 +68,16 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 	f.set(seq, rch) // sync
 
 	f.schan <- buf // sync
-	c.reset()
+	c.timer.Reset(5 * time.Second)
 
 	select {
 	case b := <-rch:
 		c.dec.ResetWith(b)
 		c.dec.DecodeByUPtr(params[f.inum:]...)
-	case <-c.c:
+	case <-c.timer.C:
 		err = timeout
 	}
-	c.stop()
+	c.timer.Stop()
 	f.del(seq)    // sync
 	f.call.Put(c) // sync
 	return
@@ -127,7 +127,7 @@ func NewClient(funcs []*Function, fns ...interface{}) (c *Client) {
 							dec:   dec,
 							enc:   enc,
 							ch:    make(chan []byte),
-							timer: newTimer(5 * time.Second),
+							timer: time.NewTimer(5 * time.Second),
 						}
 					},
 				}
@@ -164,6 +164,7 @@ func (c *Client) start() {
 	var packet []byte
 	perLength := []byte{0x00, 0x00}
 	conn := bufio.NewReader(c.conn)
+	defer c.wg.Done()
 	for {
 		//[]byte{0x00, 0x00} 为心跳包，收到该包重启设置超时时间，并取下一个包
 		// for l[0] == 0x00 && l[1] == 0x00 {

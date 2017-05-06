@@ -27,32 +27,32 @@ func init() {
 
 var coarseTime atomic.Value
 
-type timer struct {
-	*time.Timer
-	c chan struct{}
-	d time.Duration
-}
-
-func (t timer) send() {
-	t.c <- struct{}{}
-}
-func (t timer) reset() {
-	if !t.Reset(t.d) {
-		if len(t.c) == 1 {
-			<-t.c
-		}
-	}
-}
-func (t timer) stop() {
-	if !t.Stop() {
-		if len(t.c) == 1 {
-			<-t.c
-		}
-	}
-}
-
-func newTimer(d time.Duration) timer {
-	t := timer{c: make(chan struct{}), d: d}
-	t.Timer = time.AfterFunc(d, t.send)
-	return t
-}
+//
+//type timer struct {
+//	*time.Timer
+//	c chan struct{}
+//	d time.Duration
+//}
+//
+//func (t timer) send() {
+//	select {
+//	case t.c <- struct{}{}:
+//	default:
+//	}
+//}
+//func (t timer) start() {
+//	t.Reset(t.d)
+//}
+//func (t timer) stop() {
+//	if !t.Stop() && len(t.c) == 1 {
+//		fmt.Println(1)
+//		<-t.c
+//	}
+//}
+//
+//func newTimer(d time.Duration) timer {
+//	t := timer{c: make(chan struct{}, 1), d: d}
+//	t.Timer = time.AfterFunc(d, t.send)
+//	t.stop()
+//	return t
+//}
