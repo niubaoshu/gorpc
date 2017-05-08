@@ -18,12 +18,12 @@ func main() {
 	cli := gorpc.NewClient(fns[:], plus, sub, echo, add, mut, slow)
 	cli.Start()
 	start := time.Now()
-	for i := 0; i < 1; i++ {
-		plus(i, i*i)
-		sub(i, i*i)
-		echo("sdfsdfsdf")
-		add(i)
-		mut(i)
+	for i := 0; i < 10; i++ {
+		fmt.Println(plus(i, i*i))
+		fmt.Println(sub(i, i*i))
+		fmt.Println(echo("sdfsdfsdf"))
+		fmt.Println(add(i))
+		fmt.Println(mut(i))
 	}
 	cli.Stop()
 	fmt.Println(time.Now().Sub(start))

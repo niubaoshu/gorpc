@@ -15,6 +15,8 @@ import (
 
 	"time"
 
+	"strings"
+
 	"github.com/niubaoshu/gotiny"
 )
 
@@ -25,12 +27,13 @@ var (
 
 type (
 	Client struct {
-		addr    string         //端口号
-		wg      sync.WaitGroup //等待退出
-		conn    *net.TCPConn
-		schan   chan []byte
-		rchan   chan []byte
-		fid2map map[int]*safeMap
+		addr     string          //端口号
+		WG       *sync.WaitGroup //等待退出
+		exitChan chan struct{}
+		conn     *net.TCPConn
+		schan    chan []byte
+		rchan    chan []byte
+		fid2map  map[int]*safeMap
 	}
 	Function struct {
 		fnId  int
@@ -93,6 +96,7 @@ func NewClient(funcs []*Function, fns ...interface{}) (c *Client) {
 		schan:   make(chan []byte, length*100),
 		rchan:   make(chan []byte, length*100),
 		fid2map: make(map[int]*safeMap, length),
+		WG:      new(sync.WaitGroup),
 	}
 	for idx, fn := range fns {
 		seq := uint64(0)
@@ -150,7 +154,7 @@ func (c *Client) Start() error {
 	} else {
 		log.Println("连接成功", c.conn.RemoteAddr())
 	}
-	c.wg.Add(3)
+	c.WG.Add(3)
 	go c.send()
 	go c.receive()
 	go c.start()
@@ -164,7 +168,7 @@ func (c *Client) start() {
 	var packet []byte
 	perLength := []byte{0x00, 0x00}
 	conn := bufio.NewReader(c.conn)
-	defer c.wg.Done()
+	defer c.WG.Done()
 	for {
 		//[]byte{0x00, 0x00} 为心跳包，收到该包重启设置超时时间，并取下一个包
 		// for l[0] == 0x00 && l[1] == 0x00 {
@@ -172,6 +176,12 @@ func (c *Client) start() {
 		// 	c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
 		if n, err = io.ReadFull(conn, perLength); err != nil {
+			if strings.Contains(err.Error(), "use of closed network connection") {
+				log.Printf("%s连接已关闭\n", c.conn.RemoteAddr())
+				close(c.rchan)
+				close(c.schan)
+				return
+			}
 			c.conn.Close()
 			log.Println("从", c.conn.RemoteAddr(), "连接中读取包头时，读到", perLength[:n], "数据时发生错误", err.Error())
 			return
@@ -197,7 +207,7 @@ func (c *Client) send() {
 		}
 		//log.Println("向", c.conn.RemoteAddr(), "连接中发送了", pack[:n])
 	}
-	c.wg.Done()
+	c.WG.Done()
 }
 
 func (c *Client) receive() {
@@ -205,9 +215,10 @@ func (c *Client) receive() {
 	for pack := range c.rchan {
 		m[int(pack[0])<<8|int(pack[1])].get(uint64(pack[2])<<8 | uint64(pack[3])) <- pack
 	}
-	c.wg.Done()
+	c.WG.Done()
 }
 
 func (c *Client) Stop() {
-	c.wg.Wait()
+	c.conn.Close()
+	c.WG.Wait()
 }
