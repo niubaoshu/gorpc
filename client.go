@@ -17,6 +17,8 @@ import (
 
 	"strings"
 
+	"fmt"
+
 	"github.com/niubaoshu/gotiny"
 )
 
@@ -28,7 +30,7 @@ var (
 type (
 	Client struct {
 		addr     string          //端口号
-		WG       *sync.WaitGroup //等待退出
+		wg       *sync.WaitGroup //等待退出
 		exitChan chan struct{}
 		conn     *net.TCPConn
 		schan    chan []byte
@@ -46,14 +48,22 @@ type (
 	ccall struct {
 		enc   *gotiny.Encoder
 		dec   *gotiny.Decoder
-		ch    chan []byte
+		rchan chan []byte
 		timer *time.Timer
 	}
 )
 
 func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			if er, ok := e.(error); ok {
+				err = er
+			} else {
+				err = fmt.Errorf("%v", e)
+			}
+		}
+	}()
 	c := f.call.Get().(*ccall) // sync
-
 	enc := c.enc
 	enc.EncodeByUPtrs(params[:f.inum]...)
 	buf := enc.Bytes()
@@ -66,7 +76,7 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 	buf[4] = byte(seq >> 8)
 	buf[5] = byte(seq)
 
-	rch := c.ch
+	rch := c.rchan
 	//chmap := f.rchan
 	f.set(seq, rch) // sync
 
@@ -96,7 +106,7 @@ func NewClient(funcs []*Function, fns ...interface{}) (c *Client) {
 		schan:   make(chan []byte, length*100),
 		rchan:   make(chan []byte, length*100),
 		fid2map: make(map[int]*safeMap, length),
-		WG:      new(sync.WaitGroup),
+		wg:      new(sync.WaitGroup),
 	}
 	for idx, fn := range fns {
 		seq := uint64(0)
@@ -130,7 +140,7 @@ func NewClient(funcs []*Function, fns ...interface{}) (c *Client) {
 						return &ccall{
 							dec:   dec,
 							enc:   enc,
-							ch:    make(chan []byte),
+							rchan: make(chan []byte),
 							timer: time.NewTimer(5 * time.Second),
 						}
 					},
@@ -154,7 +164,7 @@ func (c *Client) Start() error {
 	} else {
 		log.Println("连接成功", c.conn.RemoteAddr())
 	}
-	c.WG.Add(3)
+	c.wg.Add(3)
 	go c.send()
 	go c.receive()
 	go c.start()
@@ -168,7 +178,7 @@ func (c *Client) start() {
 	var packet []byte
 	perLength := []byte{0x00, 0x00}
 	conn := bufio.NewReader(c.conn)
-	defer c.WG.Done()
+	defer c.wg.Done()
 	for {
 		//[]byte{0x00, 0x00} 为心跳包，收到该包重启设置超时时间，并取下一个包
 		// for l[0] == 0x00 && l[1] == 0x00 {
@@ -178,8 +188,6 @@ func (c *Client) start() {
 		if n, err = io.ReadFull(conn, perLength); err != nil {
 			if strings.Contains(err.Error(), "use of closed network connection") {
 				log.Printf("%s连接已关闭\n", c.conn.RemoteAddr())
-				close(c.rchan)
-				close(c.schan)
 				return
 			}
 			c.conn.Close()
@@ -207,7 +215,7 @@ func (c *Client) send() {
 		}
 		//log.Println("向", c.conn.RemoteAddr(), "连接中发送了", pack[:n])
 	}
-	c.WG.Done()
+	c.wg.Done()
 }
 
 func (c *Client) receive() {
@@ -215,10 +223,21 @@ func (c *Client) receive() {
 	for pack := range c.rchan {
 		m[int(pack[0])<<8|int(pack[1])].get(uint64(pack[2])<<8 | uint64(pack[3])) <- pack
 	}
-	c.WG.Done()
+	c.wg.Done()
 }
 
 func (c *Client) Stop() {
+	close(c.schan) // 停止发送
+	m := c.fid2map
+	// 检测是否还有未返回的包
+	for i := 0; i < len(m); {
+		if len(m[i].m) != 0 {
+			time.Sleep(100 * time.Microsecond)
+		} else {
+			i++
+		}
+	}
 	c.conn.Close()
-	c.WG.Wait()
+	close(c.rchan)
+	c.wg.Wait()
 }
