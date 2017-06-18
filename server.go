@@ -59,42 +59,26 @@ func NewServer(funcs ...interface{}) *server {
 				}
 			},
 		}
+		call := v.Call
 		if t.IsVariadic() {
-			fns[idx] = func(param []byte) []byte {
-				c := calls.Get().(*scall)
-				c.dec.ResetWith(param)
-				c.dec.DecodeValues(c.vals...)
-				param[5] = param[3]
-				param[4] = param[2]
-				param[3] = param[1]
-				param[2] = param[0]
-				c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面是序列号
-				c.enc.EncodeValues(v.CallSlice(c.vals)...)
-				buf := c.enc.Bytes()
-				l := len(buf) - 2
-				buf[0] = byte(l >> 8)
-				buf[1] = byte(l)
-				calls.Put(c)
-				return buf
-			}
-		} else {
-			fns[idx] = func(param []byte) []byte {
-				c := calls.Get().(*scall)
-				c.dec.ResetWith(param[4:])
-				c.dec.DecodeValues(c.vals...)
-				param[5] = param[3]
-				param[4] = param[2]
-				param[3] = param[1]
-				param[2] = param[0]
-				c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面是序列号
-				c.enc.EncodeValues(v.Call(c.vals)...)
-				buf := c.enc.Bytes()
-				l := len(buf) - 2
-				buf[0] = byte(l >> 8)
-				buf[1] = byte(l)
-				calls.Put(c)
-				return buf
-			}
+			call = v.CallSlice
+		}
+		fns[idx] = func(param []byte) []byte {
+			c := calls.Get().(*scall)
+			c.dec.ResetWith(param[4:])
+			c.dec.DecodeValues(c.vals...)
+			param[5] = param[3]
+			param[4] = param[2]
+			param[3] = param[1]
+			param[2] = param[0]
+			c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面是序列号
+			c.enc.EncodeValues(call(c.vals)...)
+			buf := c.enc.Bytes()
+			l := len(buf) - 2
+			buf[0] = byte(l >> 8)
+			buf[1] = byte(l)
+			calls.Put(c)
+			return buf
 		}
 	}
 	s := &server{
