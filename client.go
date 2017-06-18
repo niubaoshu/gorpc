@@ -45,6 +45,7 @@ type (
 		seq       uint64
 		encPool   sync.Pool
 		decPool   sync.Pool
+		chPool    sync.Pool
 		timerPool sync.Pool
 		writer    io.Writer
 		exitChan  chan struct{}
@@ -67,6 +68,7 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 	if f.fid < 0 {
 		return ErrNoFunc
 	}
+
 	select {
 	case <-f.exitChan:
 		return ErrClientClosed
@@ -88,7 +90,7 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 	buf[4] = byte(seq >> 8)
 	buf[5] = byte(seq)
 
-	rchan := make(chan []byte)
+	rchan := f.chPool.Get().(chan []byte)
 	f.set(seq, rchan) // sync
 
 	if _, err = f.writer.Write(buf); err != nil {
@@ -99,6 +101,7 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 
 	select {
 	case b := <-rchan:
+		f.chPool.Put(rchan)
 		timer.Stop()
 		f.timerPool.Put(timer)
 		dec := f.decPool.Get().(*gotiny.Decoder)
@@ -106,12 +109,15 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 		dec.DecodeByUPtr(params[f.inum:]...)
 		f.decPool.Put(dec)
 		f.Put(b)
+		f.del(seq) // sync
 	case <-timer.C:
+		f.del(seq) // sync
+		f.chPool.Put(rchan)
 		timer.Stop()
 		f.timerPool.Put(timer)
 		err = ErrTimeout
 	}
-	f.del(seq) // sync
+
 	return
 }
 
@@ -152,6 +158,9 @@ func NewFuncs(fns ...interface{}) []Function {
 		funcs[i].ityps = ityps
 		funcs[i].decPool = sync.Pool{
 			New: func() interface{} { return gotiny.NewDecoderWithTypes(otpys...) },
+		}
+		funcs[i].chPool = sync.Pool{
+			New: func() interface{} { return make(chan []byte) },
 		}
 		funcs[i].timerPool = sync.Pool{
 			New: func() interface{} {
