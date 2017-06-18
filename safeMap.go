@@ -4,13 +4,12 @@ import "sync"
 
 type safeMap struct {
 	m map[uint64]chan []byte
-	*sync.RWMutex
+	sync.RWMutex
 }
 
-func newSafeMap() safeMap {
-	return safeMap{
-		m:       make(map[uint64]chan []byte),
-		RWMutex: new(sync.RWMutex),
+func newSafeMap() *safeMap {
+	return &safeMap{
+		m: make(map[uint64]chan []byte),
 	}
 }
 
@@ -31,4 +30,10 @@ func (sm *safeMap) del(key uint64) {
 	sm.Lock()
 	delete(sm.m, key)
 	sm.Unlock()
+}
+func (sm *safeMap) len() int {
+	sm.Lock()
+	l := len(sm.m)
+	sm.Unlock()
+	return l
 }

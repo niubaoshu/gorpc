@@ -13,12 +13,16 @@ import (
 
 	"sort"
 
+	"fmt"
+
 	"github.com/niubaoshu/gotiny"
 )
 
 var (
-	ErrTimeout = errors.New("the revert packet is timeout")
-	ErrNoFunc  = errors.New("the func is not exist")
+	ErrTimeout      = errors.New("the revert packet is timeout")
+	ErrNoFunc       = errors.New("the func is not exist on server")
+	ErrClientClosed = errors.New("the client is closed")
+	getIdxFunc      *Function
 )
 
 type (
@@ -27,23 +31,25 @@ type (
 		wg         sync.WaitGroup //等待退出
 		exitChan   chan struct{}
 		rchan      chan []byte
-		chmap      []safeMap
+		chmap      []*safeMap
 		fns        []Function
 		rwc        io.ReadWriteCloser
 		errHandler func(error)
 		*bytesPool
 	}
 	Function struct {
-		ityps   []reflect.Type
-		name    string
-		fid     int
-		inum    int
-		seq     uint64
-		encPool sync.Pool
-		decPool sync.Pool
-		writer  io.Writer
+		ityps     []reflect.Type
+		name      string
+		fid       int
+		inum      int
+		seq       uint64
+		encPool   sync.Pool
+		decPool   sync.Pool
+		timerPool sync.Pool
+		writer    io.Writer
+		exitChan  chan struct{}
 		*bytesPool
-		safeMap
+		*safeMap
 	}
 )
 
@@ -61,6 +67,14 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 	if f.fid < 0 {
 		return ErrNoFunc
 	}
+	select {
+	case <-f.exitChan:
+		return ErrClientClosed
+	default:
+	}
+
+	timer := f.timerPool.Get().(*time.Timer)
+	timer.Reset(5 * time.Second)
 
 	enc := f.encPool.Get().(*gotiny.Encoder)
 	enc.EncodeByUPtrs(params[:f.inum]...)
@@ -85,17 +99,20 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 
 	select {
 	case b := <-rchan:
-		f.del(seq) // sync
+		timer.Stop()
+		f.timerPool.Put(timer)
 		dec := f.decPool.Get().(*gotiny.Decoder)
 		dec.ResetWith(b[4:])
 		dec.DecodeByUPtr(params[f.inum:]...)
 		f.decPool.Put(dec)
 		f.Put(b)
-		return
-	case <-time.After(5 * time.Second):
-		f.del(seq) // sync
-		return ErrTimeout
+	case <-timer.C:
+		timer.Stop()
+		f.timerPool.Put(timer)
+		err = ErrTimeout
 	}
+	f.del(seq) // sync
+	return
 }
 
 func NewClient(fns []Function) *Client {
@@ -103,13 +120,9 @@ func NewClient(fns []Function) *Client {
 	c := &Client{
 		fnum:      l,
 		rchan:     make(chan []byte, l*100),
-		bytesPool: newbytesPool(),
+		bytesPool: fns[0].bytesPool,
+		exitChan:  fns[0].exitChan,
 		fns:       fns,
-	}
-	for i := 0; i < l; i++ {
-		//c.chmap[i].m = make(map[uint64]chan []byte)
-		//fns[i].safeMap = c.chmap[i]
-		fns[i].bytesPool = c.bytesPool
 	}
 	return c
 }
@@ -117,6 +130,8 @@ func NewClient(fns []Function) *Client {
 func NewFuncs(fns ...interface{}) []Function {
 	l := len(fns)
 	funcs := make([]Function, l)
+	bytesPool := newbytesPool()
+	exitChan := make(chan struct{})
 	for i := 0; i < l; i++ {
 		t := reflect.TypeOf(fns[i])
 		inum := t.NumIn()
@@ -129,11 +144,21 @@ func NewFuncs(fns ...interface{}) []Function {
 		for i := 0; i < onum; i++ {
 			otpys[i] = t.Out(i)
 		}
+		funcs[i].safeMap = newSafeMap()
+		funcs[i].exitChan = exitChan
+		funcs[i].bytesPool = bytesPool
 		funcs[i].name = getFuncName(fns[i])
 		funcs[i].inum = inum
 		funcs[i].ityps = ityps
 		funcs[i].decPool = sync.Pool{
 			New: func() interface{} { return gotiny.NewDecoderWithTypes(otpys...) },
+		}
+		funcs[i].timerPool = sync.Pool{
+			New: func() interface{} {
+				timer := time.NewTimer(5 * time.Second)
+				timer.Stop()
+				return timer
+			},
 		}
 
 	}
@@ -141,37 +166,31 @@ func NewFuncs(fns ...interface{}) []Function {
 }
 
 func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
-	c.rwc = rwc
+
 	if c.errHandler == nil {
 		c.errHandler = func(err error) { log.Println(err) }
 	}
+	c.rwc = rwc
 	for i := 0; i < c.fnum; i++ {
 		c.fns[i].writer = rwc
 	}
-	c.wg.Add(2)
+	c.wg.Add(1)
 	go c.loopRead(rwc)
 
-	var func0 *Function
-	f0 := func(names []string) (fids []int, err error) {
-		err = func0.Rcall(unsafe.Pointer(&names), unsafe.Pointer(&fids))
-		return
-	}
-	func0 = &NewFuncs(f0)[0]
-	chmap := newSafeMap()
-	func0.safeMap = chmap
+	getIdxFunc = &NewFuncs(getFids)[0]
 	go func() {
 		p := <-c.rchan
-		chmap.get(1) <- p
+		getIdxFunc.safeMap.get(1) <- p
 	}()
-	func0.bytesPool = c.bytesPool
-	func0.encPool = sync.Pool{
+	getIdxFunc.encPool = sync.Pool{
 		New: func() interface{} {
-			enc := gotiny.NewEncoderWithTypes(func0.ityps...)
-			enc.ResetWithBuf([]byte{0, 0, byte(func0.fid >> 8), byte(func0.fid), 0, 0})
+			enc := gotiny.NewEncoderWithTypes(getIdxFunc.ityps...)
+			enc.ResetWithBuf([]byte{0, 0, 0, 0, 0, 0})
 			return enc
 		},
 	}
-	func0.writer = rwc
+	getIdxFunc.writer = rwc
+
 	names := make([]string, c.fnum)
 	f2name := make(map[string]*Function)
 	for i := 0; i < c.fnum; i++ {
@@ -181,18 +200,16 @@ func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
 	}
 	sort.Strings(names)
 
-	fids, err := f0(names)
+	fids, maxid, err := getFids(names)
 	if err != nil {
 		return err
 	}
-	maxid := 0
+	c.chmap = make([]*safeMap, maxid+1) // 0位置不提供服务
 	for i := 0; i < c.fnum; i++ {
 		f := f2name[names[i]]
 		f.fid = fids[i]
-		if maxid < fids[i] {
-			maxid = fids[i]
-		}
 		if f.fid > 0 {
+			c.chmap[f.fid] = f.safeMap
 			f.encPool = sync.Pool{
 				New: func() interface{} {
 					enc := gotiny.NewEncoderWithTypes(f.ityps...)
@@ -202,15 +219,6 @@ func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
 			}
 		}
 	}
-	c.chmap = make([]safeMap, maxid+1) // 0位置不提供服务
-	for i, fid := range fids {
-		if fid > 0 {
-			m := newSafeMap()
-			c.chmap[fid] = m
-			f2name[names[i]].safeMap = m
-		}
-	}
-
 	go c.receive()
 	return nil
 }
@@ -244,7 +252,6 @@ func (c *Client) loopRead(r io.Reader) {
 		conn      = newBufReader(r)
 	)
 	for {
-
 		if _, err = io.ReadFull(conn, perLength); err != nil {
 			c.errHandler(err)
 			break
@@ -269,16 +276,23 @@ func (c *Client) receive() {
 }
 
 func (c *Client) Stop() {
+	close(c.exitChan)
 	m := c.chmap
 	// 检测是否还有未返回的包
-	for i := 0; i < len(m); {
-		if len(m[i].m) != 0 {
+	for i := 0; i < len(m) && m[i] != nil; {
+		//TODO 检测长度时Rcall 尚未set,测试会发现长度为0，而尚有调用未结束
+		if m[i].len() != 0 {
 			time.Sleep(100 * time.Microsecond)
 		} else {
 			i++
 		}
 	}
 	c.rwc.Close()
-	close(c.rchan)
 	c.wg.Wait()
+	fmt.Printf("%+v", c.wg)
+}
+
+func getFids(names []string) (fids []int, max int, err error) {
+	err = getIdxFunc.Rcall(unsafe.Pointer(&names), unsafe.Pointer(&fids), unsafe.Pointer(&max))
+	return
 }

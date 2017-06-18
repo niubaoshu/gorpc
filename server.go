@@ -39,9 +39,10 @@ func NewServer(funcs ...interface{}) *server {
 		addr:      defaultaddr,
 		fnames:    make([]string, l),
 	}
-	nfs[0] = func(names []string) []int {
+	nfs[0] = func(names []string) ([]int, int) {
 		sl, cl := len(s.fnames), len(names)
 		ret := make([]int, cl)
+		max := 0
 		for i, j := 0, 0; i < sl && j < cl; {
 			if s.fnames[i] > names[j] {
 				ret[j] = -1 //没有该服务返回0
@@ -51,10 +52,11 @@ func NewServer(funcs ...interface{}) *server {
 			} else {
 				i++
 				ret[j] = i //函数id从1开始
+				max = i
 				j++
 			}
 		}
-		return ret
+		return ret, max
 	}
 	nfs = append(nfs, funcs...)
 	fns := make([]func([]byte) []byte, l)
@@ -78,52 +80,33 @@ func NewServer(funcs ...interface{}) *server {
 				for i := 0; i < len(itpys); i++ {
 					ivs[i] = reflect.New(itpys[i]).Elem()
 				}
-				dec := gotiny.NewDecoderWithTypes(itpys...)
 				return &scall{
-					dec:  dec,
+					dec:  gotiny.NewDecoderWithTypes(itpys...),
 					enc:  gotiny.NewEncoderWithTypes(otpys...),
 					vals: ivs,
 				}
 			},
 		}
-		var f func([]byte) []byte
+		call := v.Call
 		if t.IsVariadic() {
-			f = func(param []byte) []byte {
-				c := calls.Get().(*scall)
-				//0,1个是函数id,1,2个存放序列号
-				c.dec.ResetWith(param[4:])
-				c.dec.DecodeValues(c.vals...)
-				param[5] = param[3]
-				param[4] = param[2]
-				param[3] = param[1]
-				param[2] = param[0]
-				c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面2是序列号
-				c.enc.EncodeValues(v.CallSlice(c.vals)...)
-				buf := c.enc.Bytes()
-				l := len(buf) - 2 // 0,1是保存后面的长度的,所以不计入长度
-				buf[0] = byte(l >> 8)
-				buf[1] = byte(l)
-				calls.Put(c)
-				return buf
-			}
-		} else {
-			f = func(param []byte) []byte {
-				c := calls.Get().(*scall)
-				c.dec.ResetWith(param[4:])
-				c.dec.DecodeValues(c.vals...)
-				param[5] = param[3]
-				param[4] = param[2]
-				param[3] = param[1]
-				param[2] = param[0]
-				c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面2是序列号
-				c.enc.EncodeValues(v.Call(c.vals)...)
-				buf := c.enc.Bytes()
-				l := len(buf) - 2
-				buf[0] = byte(l >> 8)
-				buf[1] = byte(l)
-				calls.Put(c)
-				return buf
-			}
+			call = v.CallSlice
+		}
+		f := func(param []byte) []byte {
+			c := calls.Get().(*scall)
+			c.dec.ResetWith(param[4:])
+			c.dec.DecodeValues(c.vals...)
+			param[5] = param[3]
+			param[4] = param[2]
+			param[3] = param[1]
+			param[2] = param[0]
+			c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面2是序列号
+			c.enc.EncodeValues(call(c.vals)...)
+			buf := c.enc.Bytes()
+			l := len(buf) - 2
+			buf[0] = byte(l >> 8)
+			buf[1] = byte(l)
+			calls.Put(c)
+			return buf
 		}
 		name := findNameWithPtr(v.Pointer())
 		for idx > 1 && name < s.fnames[idx-1] {
