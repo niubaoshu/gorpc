@@ -13,8 +13,6 @@ import (
 
 	"sort"
 
-	"fmt"
-
 	"github.com/niubaoshu/gotiny"
 )
 
@@ -101,6 +99,7 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 
 	select {
 	case b := <-rchan:
+		f.del(seq) // sync
 		f.chPool.Put(rchan)
 		timer.Stop()
 		f.timerPool.Put(timer)
@@ -109,8 +108,8 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 		dec.DecodeByUPtr(params[f.inum:]...)
 		f.decPool.Put(dec)
 		f.Put(b)
-		f.del(seq) // sync
-	case <-timer.C:
+	case <-timer.C: //
+		// TODO 若没有及时删除chan,chan中被放入数据可能导致下次get到这个chan,因为已经有值了而出错
 		f.del(seq) // sync
 		f.chPool.Put(rchan)
 		timer.Stop()
@@ -281,7 +280,6 @@ func (c *Client) receive() {
 	for pack := range c.rchan {
 		m[int(pack[0])<<8|int(pack[1])].get(uint64(pack[2])<<8 | uint64(pack[3])) <- pack
 	}
-	c.wg.Done()
 }
 
 func (c *Client) Stop() {
@@ -298,7 +296,6 @@ func (c *Client) Stop() {
 	}
 	c.rwc.Close()
 	c.wg.Wait()
-	fmt.Printf("%+v", c.wg)
 }
 
 func getFids(names []string) (fids []int, max int, err error) {

@@ -18,9 +18,8 @@ type (
 		functions []func([]byte) []byte //funcsinfo里存储的数据不会修改
 		fnames    []string
 	}
-	scall struct {
+	dec struct {
 		dec  *gotiny.Decoder
-		enc  *gotiny.Encoder
 		vals []reflect.Value
 	}
 )
@@ -73,39 +72,64 @@ func NewServer(funcs ...interface{}) *server {
 		for i := 0; i < onum; i++ {
 			otpys[i] = t.Out(i)
 		}
-
-		calls := sync.Pool{
-			New: func() interface{} {
-				ivs := make([]reflect.Value, len(itpys))
-				for i := 0; i < len(itpys); i++ {
-					ivs[i] = reflect.New(itpys[i]).Elem()
-				}
-				return &scall{
-					dec:  gotiny.NewDecoderWithTypes(itpys...),
-					enc:  gotiny.NewEncoderWithTypes(otpys...),
-					vals: ivs,
-				}
-			},
-		}
 		call := v.Call
 		if t.IsVariadic() {
 			call = v.CallSlice
 		}
+		var dec func(param []byte) []reflect.Value
+		var put func([]reflect.Value)
+		if inum != 0 {
+			decpool := sync.Pool{New: func() interface{} { return gotiny.NewDecoderWithTypes(itpys...) }}
+			valpool := sync.Pool{
+				New: func() interface{} {
+					ivs := make([]reflect.Value, len(itpys))
+					for i := 0; i < len(itpys); i++ {
+						ivs[i] = reflect.New(itpys[i]).Elem()
+					}
+					return ivs
+				},
+			}
+
+			dec = func(param []byte) []reflect.Value {
+				d := decpool.Get().(*gotiny.Decoder)
+				d.ResetWith(param)
+				vals := valpool.Get().([]reflect.Value)
+				d.DecodeValues(vals...)
+				decpool.Put(d)
+				return vals
+			}
+			put = func(vals []reflect.Value) {
+				valpool.Put(vals)
+			}
+		} else {
+			dec = func([]byte) []reflect.Value { return nil }
+			put = func([]reflect.Value) {}
+		}
+		var enc func([]byte, []reflect.Value) []byte
+		if onum != 0 {
+			encpool := sync.Pool{New: func() interface{} { return gotiny.NewEncoderWithTypes(otpys...) }}
+			enc = func(buf []byte, vals []reflect.Value) []byte {
+				e := encpool.Get().(*gotiny.Encoder)
+				e.ResetWithBuf(buf)
+				e.EncodeValues(call(vals)...)
+				put(vals)
+				b := e.Bytes()
+				encpool.Put(e)
+				return b
+			}
+		} else {
+			enc = func(buf []byte, vals []reflect.Value) []byte { call(vals); put(vals); return buf }
+		}
 		f := func(param []byte) []byte {
-			c := calls.Get().(*scall)
-			c.dec.ResetWith(param[4:])
-			c.dec.DecodeValues(c.vals...)
+			vals := dec(param[4:])
 			param[5] = param[3]
 			param[4] = param[2]
 			param[3] = param[1]
 			param[2] = param[0]
-			c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面2是序列号
-			c.enc.EncodeValues(call(c.vals)...)
-			buf := c.enc.Bytes()
+			buf := enc(param[:6], vals) //前四个用来存放长度和函数id,后面2是序列号
 			l := len(buf) - 2
 			buf[0] = byte(l >> 8)
 			buf[1] = byte(l)
-			calls.Put(c)
 			return buf
 		}
 		name := findNameWithPtr(v.Pointer())
