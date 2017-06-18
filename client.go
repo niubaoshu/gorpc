@@ -1,225 +1,267 @@
 package gorpc
 
 import (
-	"bufio"
 	"errors"
 	"io"
 	"log"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
-
-	"reflect"
-
+	"time"
 	"unsafe"
 
-	"time"
-
-	"strings"
-
-	"fmt"
+	"sort"
 
 	"github.com/niubaoshu/gotiny"
 )
 
 var (
-	perLength = []byte{0x00, 0x00}
-	timeout   = errors.New("the revert packet is timeout")
+	ErrTimeout = errors.New("the revert packet is timeout")
+	ErrNoFunc  = errors.New("the func is not exist")
 )
 
 type (
 	Client struct {
-		addr     string          //端口号
-		wg       *sync.WaitGroup //等待退出
-		exitChan chan struct{}
-		conn     *net.TCPConn
-		schan    chan []byte
-		rchan    chan []byte
-		fid2map  map[int]*safeMap
+		fnum       int
+		wg         sync.WaitGroup //等待退出
+		exitChan   chan struct{}
+		rchan      chan []byte
+		chmap      []safeMap
+		fns        []Function
+		rwc        io.ReadWriteCloser
+		errHandler func(error)
+		*bytesPool
 	}
 	Function struct {
-		fnId  int
-		inum  int
-		seq   *uint64
-		call  sync.Pool
-		schan chan []byte
-		*safeMap
-	}
-	ccall struct {
-		enc   *gotiny.Encoder
-		dec   *gotiny.Decoder
-		rchan chan []byte
-		timer *time.Timer
+		ityps   []reflect.Type
+		name    string
+		fid     int
+		inum    int
+		seq     uint64
+		encPool sync.Pool
+		decPool sync.Pool
+		writer  io.Writer
+		*bytesPool
+		safeMap
 	}
 )
 
 func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			if er, ok := e.(error); ok {
-				err = er
-			} else {
-				err = fmt.Errorf("%v", e)
-			}
-		}
-	}()
-	c := f.call.Get().(*ccall) // sync
-	enc := c.enc
+	//defer func() {
+	//	if e := recover(); e != nil {
+	//		if er, ok := e.(error); ok {
+	//			err = er
+	//		} else {
+	//			err = fmt.Errorf("%v", e)
+	//		}
+	//	}
+	//}()
+
+	if f.fid < 0 {
+		return ErrNoFunc
+	}
+
+	enc := f.encPool.Get().(*gotiny.Encoder)
 	enc.EncodeByUPtrs(params[:f.inum]...)
 	buf := enc.Bytes()
 	enc.Reset()
 
-	l := len(buf) - 2
+	l := len(buf) - 2 //0,1字节不计算长度
 	buf[0] = byte(l >> 8)
 	buf[1] = byte(l)
-	seq := atomic.AddUint64(f.seq, 1) % 65536 // sync
+	seq := atomic.AddUint64(&f.seq, 1) & 0xFFFF // sync
 	buf[4] = byte(seq >> 8)
 	buf[5] = byte(seq)
 
-	rch := c.rchan
-	//chmap := f.rchan
-	f.set(seq, rch) // sync
+	rchan := make(chan []byte)
+	f.set(seq, rchan) // sync
 
-	f.schan <- buf // sync
-	c.timer.Reset(5 * time.Second)
+	if _, err = f.writer.Write(buf); err != nil {
+		return err
+	}
+	f.encPool.Put(enc)
+	//log.Println("client:发送了", buf)
 
 	select {
-	case b := <-rch:
-		c.dec.ResetWith(b)
-		c.dec.DecodeByUPtr(params[f.inum:]...)
-	case <-c.timer.C:
-		err = timeout
+	case b := <-rchan:
+		f.del(seq) // sync
+		dec := f.decPool.Get().(*gotiny.Decoder)
+		dec.ResetWith(b[4:])
+		dec.DecodeByUPtr(params[f.inum:]...)
+		f.decPool.Put(dec)
+		f.Put(b)
+		return
+	case <-time.After(5 * time.Second):
+		f.del(seq) // sync
+		return ErrTimeout
 	}
-	c.timer.Stop()
-	f.del(seq)    // sync
-	f.call.Put(c) // sync
-	return
 }
 
-func NewClient(funcs []*Function, fns ...interface{}) (c *Client) {
-	length := len(fns)
-	if length != len(funcs) {
-		panic("length must equal")
+func NewClient(fns []Function) *Client {
+	l := len(fns)
+	c := &Client{
+		fnum:      l,
+		rchan:     make(chan []byte, l*100),
+		bytesPool: newbytesPool(),
+		fns:       fns,
 	}
-	c = &Client{
-		addr:    defaultaddr,
-		schan:   make(chan []byte, length*100),
-		rchan:   make(chan []byte, length*100),
-		fid2map: make(map[int]*safeMap, length),
-		wg:      new(sync.WaitGroup),
+	for i := 0; i < l; i++ {
+		//c.chmap[i].m = make(map[uint64]chan []byte)
+		//fns[i].safeMap = c.chmap[i]
+		fns[i].bytesPool = c.bytesPool
 	}
-	for idx, fn := range fns {
-		seq := uint64(0)
-		t := reflect.TypeOf(fn)
+	return c
+}
+
+func NewFuncs(fns ...interface{}) []Function {
+	l := len(fns)
+	funcs := make([]Function, l)
+	for i := 0; i < l; i++ {
+		t := reflect.TypeOf(fns[i])
 		inum := t.NumIn()
-		itpys := make([]reflect.Type, inum)
+		ityps := make([]reflect.Type, inum)
 		for i := 0; i < inum; i++ {
-			itpys[i] = t.In(i)
+			ityps[i] = t.In(i)
 		}
-		onum := t.NumOut() - 1
+		onum := t.NumOut() - 1 //error 不参与解码
 		otpys := make([]reflect.Type, onum)
 		for i := 0; i < onum; i++ {
 			otpys[i] = t.Out(i)
 		}
-		c.fid2map[idx] = &safeMap{
-			m: make(map[uint64]chan []byte),
+		funcs[i].name = getFuncName(fns[i])
+		funcs[i].inum = inum
+		funcs[i].ityps = ityps
+		funcs[i].decPool = sync.Pool{
+			New: func() interface{} { return gotiny.NewDecoderWithTypes(otpys...) },
 		}
-		funcs[idx] = &Function{
-			fnId:    idx,
-			seq:     &seq,
-			inum:    inum,
-			schan:   c.schan,
-			safeMap: c.fid2map[idx],
-			call: func(idx int) sync.Pool {
-				return sync.Pool{
-					New: func() interface{} {
-						dec := gotiny.NewDecoderWithTypes(otpys...)
-						dec.SetOff(4) //前两个是函数id,后两个存放序列号
-						enc := gotiny.NewEncoderWithTypes(itpys...)
-						enc.ResetWith([]byte{0, 0, byte(idx >> 8), byte(idx), 0, 0})
-						return &ccall{
-							dec:   dec,
-							enc:   enc,
-							rchan: make(chan []byte),
-							timer: time.NewTimer(5 * time.Second),
-						}
-					},
-				}
-			}(idx),
-		}
+
 	}
-	return
+	return funcs
 }
 
-func (c *Client) Start() error {
-	addr, err := net.ResolveTCPAddr("tcp", c.addr)
+func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
+	c.rwc = rwc
+	if c.errHandler == nil {
+		c.errHandler = func(err error) { log.Println(err) }
+	}
+	for i := 0; i < c.fnum; i++ {
+		c.fns[i].writer = rwc
+	}
+	c.wg.Add(2)
+	go c.loopRead(rwc)
+
+	var func0 *Function
+	f0 := func(names []string) (fids []int, err error) {
+		err = func0.Rcall(unsafe.Pointer(&names), unsafe.Pointer(&fids))
+		return
+	}
+	func0 = &NewFuncs(f0)[0]
+	chmap := newSafeMap()
+	func0.safeMap = chmap
+	go func() {
+		p := <-c.rchan
+		chmap.get(1) <- p
+	}()
+	func0.bytesPool = c.bytesPool
+	func0.encPool = sync.Pool{
+		New: func() interface{} {
+			enc := gotiny.NewEncoderWithTypes(func0.ityps...)
+			enc.ResetWithBuf([]byte{0, 0, byte(func0.fid >> 8), byte(func0.fid), 0, 0})
+			return enc
+		},
+	}
+	func0.writer = rwc
+	names := make([]string, c.fnum)
+	f2name := make(map[string]*Function)
+	for i := 0; i < c.fnum; i++ {
+		name := c.fns[i].name
+		names[i] = name
+		f2name[name] = &c.fns[i]
+	}
+	sort.Strings(names)
+
+	fids, err := f0(names)
 	if err != nil {
-		log.Fatalln("地址解析失败", c.addr, err.Error())
 		return err
 	}
-	c.conn, err = net.DialTCP("tcp", nil, addr)
-	if err != nil {
-		log.Fatalln("链接失败", c.addr, err.Error())
-		return err
-	} else {
-		log.Println("连接成功", c.conn.RemoteAddr())
+	maxid := 0
+	for i := 0; i < c.fnum; i++ {
+		f := f2name[names[i]]
+		f.fid = fids[i]
+		if maxid < fids[i] {
+			maxid = fids[i]
+		}
+		if f.fid > 0 {
+			f.encPool = sync.Pool{
+				New: func() interface{} {
+					enc := gotiny.NewEncoderWithTypes(f.ityps...)
+					enc.ResetWithBuf([]byte{0, 0, byte(f.fid >> 8), byte(f.fid), 0, 0})
+					return enc
+				},
+			}
+		}
 	}
-	c.wg.Add(3)
-	go c.send()
+	c.chmap = make([]safeMap, maxid+1) // 0位置不提供服务
+	for i, fid := range fids {
+		if fid > 0 {
+			m := newSafeMap()
+			c.chmap[fid] = m
+			f2name[names[i]].safeMap = m
+		}
+	}
+
 	go c.receive()
-	go c.start()
 	return nil
 }
 
-func (c *Client) start() {
-	var n int
-	var err error
-
-	var packet []byte
-	perLength := []byte{0x00, 0x00}
-	conn := bufio.NewReader(c.conn)
-	defer c.wg.Done()
-	for {
-		//[]byte{0x00, 0x00} 为心跳包，收到该包重启设置超时时间，并取下一个包
-		// for l[0] == 0x00 && l[1] == 0x00 {
-		// 	//超过10秒没有收到包超时，关闭连接
-		// 	c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-
-		if n, err = io.ReadFull(conn, perLength); err != nil {
-			if strings.Contains(err.Error(), "use of closed network connection") {
-				log.Printf("%s连接已关闭\n", c.conn.RemoteAddr())
-				return
-			}
-			c.conn.Close()
-			log.Println("从", c.conn.RemoteAddr(), "连接中读取包头时，读到", perLength[:n], "数据时发生错误", err.Error())
-			return
-		}
-		//}
-
-		packet = GetNByte(int(perLength[0])<<8 | int(perLength[1])) //耗资源
-		if n, err = io.ReadFull(conn, packet); err != nil {
-			c.conn.Close()
-			log.Println("从", c.conn.RemoteAddr(), "连接中读取包体时，读到", packet[:n], "数据时发生错误", err.Error())
-			return
-		}
-		//log.Println("收到", c.conn.RemoteAddr(), "  的数据", perLength, packet)
-		c.rchan <- packet
-	}
+func (c *Client) StartConn(conn net.Conn) error {
+	return c.StartIO(conn)
 }
-func (c *Client) send() {
-	conn := c.conn
-	for pack := range c.schan {
-		n, err := conn.Write(pack)
-		if err != nil {
-			log.Println("向", c.conn.RemoteAddr(), "连接中发送", pack[:n], "时发生错误", err.Error())
+
+func (c *Client) StartAddr(addr string) error {
+	a, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return err
+	}
+	conn, err := net.DialTCP("tcp", nil, a)
+	if err != nil {
+		return err
+	}
+	log.Printf("链接     %s 成功.\n", conn.RemoteAddr())
+	return c.StartConn(conn)
+}
+
+func (c *Client) Start() error {
+	return c.StartAddr(defaultaddr)
+}
+
+func (c *Client) loopRead(r io.Reader) {
+	var (
+		err       error
+		pack      []byte
+		perLength = []byte{0x00, 0x00}
+		conn      = newBufReader(r)
+	)
+	for {
+
+		if _, err = io.ReadFull(conn, perLength); err != nil {
+			c.errHandler(err)
+			break
 		}
-		//log.Println("向", c.conn.RemoteAddr(), "连接中发送了", pack[:n])
+		pack = c.getNByte(int(perLength[0])<<8 | int(perLength[1])) //耗资源
+		if _, err = io.ReadFull(conn, pack); err != nil {
+			c.errHandler(err)
+			break
+		}
+		//log.Println("client:收到数据", perLength, pack)
+		c.rchan <- pack
 	}
 	c.wg.Done()
 }
 
 func (c *Client) receive() {
-	m := c.fid2map
+	m := c.chmap
 	for pack := range c.rchan {
 		m[int(pack[0])<<8|int(pack[1])].get(uint64(pack[2])<<8 | uint64(pack[3])) <- pack
 	}
@@ -227,8 +269,7 @@ func (c *Client) receive() {
 }
 
 func (c *Client) Stop() {
-	close(c.schan) // 停止发送
-	m := c.fid2map
+	m := c.chmap
 	// 检测是否还有未返回的包
 	for i := 0; i < len(m); {
 		if len(m[i].m) != 0 {
@@ -237,7 +278,7 @@ func (c *Client) Stop() {
 			i++
 		}
 	}
-	c.conn.Close()
+	c.rwc.Close()
 	close(c.rchan)
 	c.wg.Wait()
 }

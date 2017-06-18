@@ -1,12 +1,17 @@
 package gorpc
 
-import (
-	"sync"
-)
+import "sync"
 
 type safeMap struct {
 	m map[uint64]chan []byte
-	sync.RWMutex
+	*sync.RWMutex
+}
+
+func newSafeMap() safeMap {
+	return safeMap{
+		m:       make(map[uint64]chan []byte),
+		RWMutex: new(sync.RWMutex),
+	}
 }
 
 func (sm *safeMap) set(key uint64, ch chan []byte) {

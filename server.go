@@ -16,6 +16,7 @@ type (
 		waitGroup *sync.WaitGroup // wait for all goroutines
 		addr      string
 		functions []func([]byte) []byte //funcsinfo里存储的数据不会修改
+		fnames    []string
 	}
 	scall struct {
 		dec  *gotiny.Decoder
@@ -29,9 +30,35 @@ const defaultaddr = ":3345"
 // Start starts service
 
 func NewServer(funcs ...interface{}) *server {
-	fns := make([]func([]byte) []byte, len(funcs))
-
-	for idx, fn := range funcs {
+	l := len(funcs) + 1
+	nfs := make([]interface{}, 1, l)
+	s := &server{
+		funcSum:   l,
+		exitChan:  make(chan struct{}),
+		waitGroup: new(sync.WaitGroup),
+		addr:      defaultaddr,
+		fnames:    make([]string, l),
+	}
+	nfs[0] = func(names []string) []int {
+		sl, cl := len(s.fnames), len(names)
+		ret := make([]int, cl)
+		for i, j := 0, 0; i < sl && j < cl; {
+			if s.fnames[i] > names[j] {
+				ret[j] = -1 //没有该服务返回0
+				j++
+			} else if s.fnames[i] < names[j] {
+				i++
+			} else {
+				i++
+				ret[j] = i //函数id从1开始
+				j++
+			}
+		}
+		return ret
+	}
+	nfs = append(nfs, funcs...)
+	fns := make([]func([]byte) []byte, l)
+	for idx, fn := range nfs {
 		t := reflect.TypeOf(fn)
 		v := reflect.ValueOf(fn)
 		inum := t.NumIn()
@@ -52,7 +79,6 @@ func NewServer(funcs ...interface{}) *server {
 					ivs[i] = reflect.New(itpys[i]).Elem()
 				}
 				dec := gotiny.NewDecoderWithTypes(itpys...)
-				dec.SetOff(4) //前两个是函数id,后两个存放序列号
 				return &scall{
 					dec:  dec,
 					enc:  gotiny.NewEncoderWithTypes(otpys...),
@@ -60,34 +86,36 @@ func NewServer(funcs ...interface{}) *server {
 				}
 			},
 		}
+		var f func([]byte) []byte
 		if t.IsVariadic() {
-			fns[idx] = func(param []byte) []byte {
+			f = func(param []byte) []byte {
 				c := calls.Get().(*scall)
-				c.dec.ResetWith(param)
+				//0,1个是函数id,1,2个存放序列号
+				c.dec.ResetWith(param[4:])
 				c.dec.DecodeValues(c.vals...)
 				param[5] = param[3]
 				param[4] = param[2]
 				param[3] = param[1]
 				param[2] = param[0]
-				c.enc.ResetWith(param[:6]) //前四个用来存放长度和函数id,后面是序列号
+				c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面2是序列号
 				c.enc.EncodeValues(v.CallSlice(c.vals)...)
 				buf := c.enc.Bytes()
-				l := len(buf) - 2
+				l := len(buf) - 2 // 0,1是保存后面的长度的,所以不计入长度
 				buf[0] = byte(l >> 8)
 				buf[1] = byte(l)
 				calls.Put(c)
 				return buf
 			}
 		} else {
-			fns[idx] = func(param []byte) []byte {
+			f = func(param []byte) []byte {
 				c := calls.Get().(*scall)
-				c.dec.ResetWith(param)
+				c.dec.ResetWith(param[4:])
 				c.dec.DecodeValues(c.vals...)
 				param[5] = param[3]
 				param[4] = param[2]
 				param[3] = param[1]
 				param[2] = param[0]
-				c.enc.ResetWith(param[:6]) //前四个用来存放长度和函数id,后面是序列号
+				c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面2是序列号
 				c.enc.EncodeValues(v.Call(c.vals)...)
 				buf := c.enc.Bytes()
 				l := len(buf) - 2
@@ -97,14 +125,17 @@ func NewServer(funcs ...interface{}) *server {
 				return buf
 			}
 		}
+		name := findNameWithPtr(v.Pointer())
+		for idx > 1 && name < s.fnames[idx-1] {
+			s.fnames[idx] = s.fnames[idx-1]
+			fns[idx] = fns[idx-1]
+			idx--
+		}
+		s.fnames[idx] = name
+		fns[idx] = f
 	}
-	s := &server{
-		funcSum:   len(funcs),
-		exitChan:  make(chan struct{}),
-		waitGroup: new(sync.WaitGroup),
-		addr:      defaultaddr,
-		functions: fns,
-	}
+	s.fnames = s.fnames[1:]
+	s.functions = fns
 	return s
 }
 
@@ -125,7 +156,7 @@ func (s *server) Start() {
 			log.Println(err)
 		}
 	}()
-	log.Println("监听地址", s.addr, "成功")
+	log.Println("监听地址", s.addr, "成功,开始提供服务", s.fnames)
 	for {
 		if conn, err := listener.AcceptTCP(); err == nil {
 			log.Println("收到连接", conn.RemoteAddr())

@@ -1,49 +1,79 @@
 package gorpc
 
 import (
+	"io"
 	"sync"
 )
 
-const (
-	tooBig = 1 << 30
-)
-
-type Buffer struct {
-	buff    []byte
-	scratch [64]byte
+type bytesPool struct {
+	sync.Pool
 }
 
-func (b *Buffer) Reset() {
-	if len(b.buff) >= tooBig {
-		b.buff = b.scratch[0:0]
-	} else {
-		b.buff = b.buff[0:0]
+func newbytesPool() *bytesPool {
+	return &bytesPool{
+		Pool: sync.Pool{
+			New: func() interface{} {
+				var arr [32]byte
+				return arr[:]
+			},
+		},
 	}
 }
 
-var BufferPool = sync.Pool{
-	New: func() interface{} {
-		b := new(Buffer)
-		b.buff = b.scratch[0:0]
-		return b
-	},
-}
-
-var BytesPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 32)
-	},
-}
-
-func (b *Buffer) Bytes() []byte {
-	return b.buff
-}
-
-func GetNByte(n int) []byte {
-	b := BytesPool.Get().([]byte)
+func (p *bytesPool) getNByte(n int) []byte {
+	b := p.Get().([]byte)
 	if len(b) >= n {
 		return b[:n]
 	}
-	BytesPool.Put(b)
+	p.Put(b)
 	return make([]byte, n)
+}
+
+type bufReader struct {
+	err  error
+	rd   io.Reader
+	buf  []byte
+	r, w int
+}
+
+func newBufReaderSize(rd io.Reader, n int) *bufReader {
+	return &bufReader{rd: rd, buf: make([]byte, n)}
+}
+
+const defaultBufSize = 4096
+
+func newBufReader(rd io.Reader) *bufReader {
+	return newBufReaderSize(rd, defaultBufSize)
+}
+
+func (b *bufReader) readErr() (err error) {
+	err = b.err
+	b.err = nil
+	return
+}
+
+func (b *bufReader) Read(p []byte) (n int, err error) {
+	n = len(p)
+	if n == 0 {
+		return 0, nil
+	}
+	if b.r == b.w {
+		if b.err != nil {
+			return 0, b.readErr()
+		}
+		if n >= len(b.buf) {
+			return b.rd.Read(p)
+		}
+		b.r, b.w = 0, 0
+		n, b.err = b.rd.Read(b.buf)
+		if n == 0 {
+			return 0, b.readErr()
+		}
+		b.w += n
+	}
+
+	// copy as much as we can
+	n = copy(p, b.buf[b.r:b.w])
+	b.r += n
+	return n, nil
 }

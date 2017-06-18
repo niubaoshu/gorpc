@@ -10,12 +10,16 @@ import (
 )
 
 var (
-	fns [6]*gorpc.Function
+	fns []gorpc.Function
 )
+
+func init() {
+	fns = gorpc.NewFuncs(plus, sub, echo, add, mut, slow)
+}
 
 // 该文件是自动生成的（除了main函数），还没有实现
 func main() {
-	cli := gorpc.NewClient(fns[:], plus, sub, echo, add, mut, slow)
+	cli := gorpc.NewClient(fns)
 	cli.Start()
 	start := time.Now()
 	for i := 0; i < 10; i++ {
@@ -56,5 +60,10 @@ func mut(a ...int) (c int, err error) {
 
 func slow(msg string) (rmsg string, err error) {
 	err = (fns[5]).Rcall(unsafe.Pointer(&msg), unsafe.Pointer(&rmsg))
+	return
+}
+
+func now() (n time.Time, err error) {
+	//err = (fns[6]).Rcall(unsafe.Pointer(&n))
 	return
 }
