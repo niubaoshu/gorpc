@@ -52,7 +52,6 @@ func NewServer(funcs ...interface{}) *server {
 					ivs[i] = reflect.New(itpys[i]).Elem()
 				}
 				dec := gotiny.NewDecoderWithTypes(itpys...)
-				dec.SetOff(4) //前两个是函数id,后两个存放序列号
 				return &scall{
 					dec:  dec,
 					enc:  gotiny.NewEncoderWithTypes(otpys...),
@@ -69,7 +68,7 @@ func NewServer(funcs ...interface{}) *server {
 				param[4] = param[2]
 				param[3] = param[1]
 				param[2] = param[0]
-				c.enc.ResetWith(param[:6]) //前四个用来存放长度和函数id,后面是序列号
+				c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面是序列号
 				c.enc.EncodeValues(v.CallSlice(c.vals)...)
 				buf := c.enc.Bytes()
 				l := len(buf) - 2
@@ -81,13 +80,13 @@ func NewServer(funcs ...interface{}) *server {
 		} else {
 			fns[idx] = func(param []byte) []byte {
 				c := calls.Get().(*scall)
-				c.dec.ResetWith(param)
+				c.dec.ResetWith(param[4:])
 				c.dec.DecodeValues(c.vals...)
 				param[5] = param[3]
 				param[4] = param[2]
 				param[3] = param[1]
 				param[2] = param[0]
-				c.enc.ResetWith(param[:6]) //前四个用来存放长度和函数id,后面是序列号
+				c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面是序列号
 				c.enc.EncodeValues(v.Call(c.vals)...)
 				buf := c.enc.Bytes()
 				l := len(buf) - 2

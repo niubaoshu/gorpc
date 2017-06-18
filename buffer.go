@@ -31,7 +31,8 @@ var BufferPool = sync.Pool{
 
 var BytesPool = sync.Pool{
 	New: func() interface{} {
-		return make([]byte, 32)
+		var arr [32]byte
+		return arr[:]
 	},
 }
 
@@ -46,4 +47,8 @@ func GetNByte(n int) []byte {
 	}
 	BytesPool.Put(b)
 	return make([]byte, n)
+}
+
+func putByte(b []byte) {
+	BytesPool.Put(b)
 }

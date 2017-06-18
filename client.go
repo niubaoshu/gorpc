@@ -85,8 +85,9 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 
 	select {
 	case b := <-rch:
-		c.dec.ResetWith(b)
+		c.dec.ResetWith(b[4:])
 		c.dec.DecodeByUPtr(params[f.inum:]...)
+		putByte(b)
 	case <-c.timer.C:
 		err = timeout
 	}
@@ -134,14 +135,15 @@ func NewClient(funcs []*Function, fns ...interface{}) (c *Client) {
 				return sync.Pool{
 					New: func() interface{} {
 						dec := gotiny.NewDecoderWithTypes(otpys...)
-						dec.SetOff(4) //前两个是函数id,后两个存放序列号
 						enc := gotiny.NewEncoderWithTypes(itpys...)
-						enc.ResetWith([]byte{0, 0, byte(idx >> 8), byte(idx), 0, 0})
+						enc.ResetWithBuf([]byte{0, 0, byte(idx >> 8), byte(idx), 0, 0})
+						timer := time.NewTimer(5 * time.Second)
+						timer.Stop()
 						return &ccall{
 							dec:   dec,
 							enc:   enc,
 							rchan: make(chan []byte),
-							timer: time.NewTimer(5 * time.Second),
+							timer: timer,
 						}
 					},
 				}

@@ -51,7 +51,7 @@ func t() {
 
 func BenchmarkIO(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		pingPong(helloworld)
+		//pingPong(helloworld)
 		add(1, 2)
 		//if err != nil {
 		//	b.Log(err)
@@ -64,7 +64,7 @@ func BenchmarkIO(b *testing.B) {
 func BenchmarkConIO(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			pingPong(helloworld)
+			//pingPong(helloworld)
 			add(1, 2)
 		}
 	})
