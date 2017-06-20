@@ -132,7 +132,7 @@ func NewServer(funcs ...interface{}) *server {
 			buf[1] = byte(l)
 			return buf
 		}
-		name := findNameWithPtr(v.Pointer())
+		name := getNameByPtr(v.Pointer())
 		for idx > 1 && name < s.fnames[idx-1] {
 			s.fnames[idx] = s.fnames[idx-1]
 			fns[idx] = fns[idx-1]
