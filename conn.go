@@ -64,7 +64,7 @@ func (c *Conn) handle(packet []byte) {
 		log.Println("没有要调用的函数", fid)
 		return
 	}
-	retbuf := c.svr.functions[fid](packet)
+	retbuf := c.svr.fns[fid](packet)
 	if cap(retbuf) != cap(packet) {
 		c.Put(packet)
 	}

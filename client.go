@@ -208,9 +208,16 @@ func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
 	}
 	sort.Strings(names)
 
-	fids, maxid, err := getFids(names)
+	fids, err := getFids(names)
 	if err != nil {
 		return err
+	}
+	maxid := 0
+	for i := len(fids) - 1; i > 0; i-- {
+		if fids[i] > 0 {
+			maxid = fids[i]
+			break
+		}
 	}
 	c.chmap = make([]*safeMap, maxid+1) // 0位置不提供服务
 	for i := 0; i < c.fnum; i++ {
@@ -298,7 +305,7 @@ func (c *Client) Stop() {
 	c.wg.Wait()
 }
 
-func getFids(names []string) (fids []int, max int, err error) {
-	err = getIdxFunc.Rcall(unsafe.Pointer(&names), unsafe.Pointer(&fids), unsafe.Pointer(&max))
+func getFids(names []string) (fids []int, err error) {
+	err = getIdxFunc.Rcall(unsafe.Pointer(&names), unsafe.Pointer(&fids))
 	return
 }

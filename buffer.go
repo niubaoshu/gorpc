@@ -22,7 +22,7 @@ func newbytesPool() *bytesPool {
 
 func (p *bytesPool) getNByte(n int) []byte {
 	b := p.Get().([]byte)
-	if len(b) >= n {
+	if cap(b) >= n {
 		return b[:n]
 	}
 	p.Put(b)
