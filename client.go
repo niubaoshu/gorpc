@@ -152,7 +152,7 @@ func NewFuncs(fns ...interface{}) []Function {
 		funcs[i].safeMap = newSafeMap()
 		funcs[i].exitChan = exitChan
 		funcs[i].bytesPool = bytesPool
-		funcs[i].name = getNameByFunc(fns[i])
+		funcs[i].name = firstToUpper(getNameByFunc(fns[i]))
 		funcs[i].inum = inum
 		funcs[i].ityps = ityps
 		funcs[i].decPool = sync.Pool{

@@ -11,7 +11,7 @@ func getNameByPtr(ptr uintptr) string {
 	fullName := getFullNameByPtr(ptr)
 	for i := len(fullName) - 1; i > 0; i-- {
 		if fullName[i] == '.' {
-			return firstToUpper(fullName[i+1:])
+			return fullName[i+1:]
 		}
 	}
 	return fullName
