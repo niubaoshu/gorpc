@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+var bufPool = newbytesPool()
+
 type bytesPool struct {
 	sync.Pool
 }
