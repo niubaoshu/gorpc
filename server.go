@@ -141,7 +141,7 @@ func NewServer(funcs ...interface{}) *server {
 				return param
 			}
 		}
-		name := getNameByPtr(v.Pointer())
+		name := firstToUpper(getNameByPtr(v.Pointer()))
 		for idx > 1 && name < fnames[idx-1] {
 			fnames[idx] = fnames[idx-1]
 			fns[idx] = fns[idx-1]
