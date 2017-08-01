@@ -18,6 +18,7 @@ type (
 		waitGroup sync.WaitGroup // wait for all goroutines
 		addr      string
 		fns       []func([]byte) []byte //funcsinfo里存储的数据不会修改
+		fnames    []string
 	}
 	vals struct {
 		rvs  []reflect.Value
@@ -56,12 +57,11 @@ func NewServer(funcs ...interface{}) *server {
 		inum, onum, call := t.NumIn(), t.NumOut(), v.Call
 		var ityps, otyps []reflect.Type
 		var decpool, encpool, valpool sync.Pool
-		var f func(param []byte) []byte
+		var f func([]byte) []byte
 		if t.IsVariadic() {
 			call = v.CallSlice
 		}
-		switch {
-		case inum != 0:
+		if inum > 0 {
 			ityps = make([]reflect.Type, inum)
 			for i := 0; i < inum; i++ {
 				ityps[i] = t.In(i)
@@ -77,15 +77,16 @@ func NewServer(funcs ...interface{}) *server {
 					return &vals{rvs, ptrs}
 				},
 			}
-			fallthrough
-		case onum != 0:
+		}
+		if onum > 0 {
 			otyps = make([]reflect.Type, onum)
 			for i := 0; i < onum; i++ {
 				otyps[i] = t.Out(i)
 			}
 			encpool = sync.Pool{New: func() interface{} { return gotiny.NewEncoderWithType(otyps...) }}
-			fallthrough
-		case inum != 0 && onum != 0:
+		}
+		switch {
+		case inum > 0 && onum > 0:
 			f = func(param []byte) []byte {
 				d := decpool.Get().(*gotiny.Decoder)
 				vs := valpool.Get().(*vals)
@@ -103,7 +104,7 @@ func NewServer(funcs ...interface{}) *server {
 				buf[0], buf[1] = byte(l>>8), byte(l)
 				return buf
 			}
-		case inum != 0:
+		case inum > 0:
 			f = func(param []byte) []byte {
 				d := decpool.Get().(*gotiny.Decoder)
 				vs := valpool.Get().(*vals)
@@ -115,7 +116,7 @@ func NewServer(funcs ...interface{}) *server {
 				param[5], param[4], param[3], param[2], param[1], param[0] = param[3], param[2], param[1], param[0], 0, 4
 				return param
 			}
-		case onum != 0:
+		case onum > 0:
 			f = func(param []byte) []byte { //param 长度为4
 				param = param[:6]
 				param[5], param[4], param[3], param[2] = param[3], param[2], param[1], param[0]
@@ -150,6 +151,7 @@ func NewServer(funcs ...interface{}) *server {
 		exitChan: make(chan struct{}),
 		addr:     defaultaddr,
 		fns:      fns,
+		fnames:   fnames,
 	}
 }
 
@@ -170,7 +172,7 @@ func (s *server) Start() {
 			log.Println(err)
 		}
 	}()
-	log.Println("监听地址", s.addr, "成功,开始提供服务")
+	log.Println("监听地址", s.addr, "成功,开始提供服务:", s.fnames[1:])
 	for {
 		if conn, err := listener.AcceptTCP(); err == nil {
 			log.Println("收到连接", conn.RemoteAddr())

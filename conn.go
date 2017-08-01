@@ -19,7 +19,7 @@ func NewConn(c *net.TCPConn, s *server) (ret *Conn) {
 	ret = &Conn{
 		conn:      c,
 		svr:       s,
-		bytesPool: newbytesPool(),
+		bytesPool: bufPool,
 		pool: &workerPool{
 			MaxWorkersCount: 256 * 1024,
 		},

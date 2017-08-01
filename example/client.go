@@ -6,16 +6,19 @@ import (
 	"fmt"
 	"time"
 
+	"net"
+
 	"github.com/niubaoshu/gorpc"
 )
 
 var (
-	fns []gorpc.Function
+	fns, ns = gorpc.GetFnsInfo((*sdk)(nil))
 )
 
-func init() {
-	fns = gorpc.NewFuncs(plus, sub, echo, add, mut, slow)
+type sdk struct {
 }
+
+func Dial() *sdk { return &sdk{} }
 
 // 该文件是自动生成的（除了main函数），还没有实现
 func main() {
@@ -29,6 +32,7 @@ func main() {
 		fmt.Println(add(i))
 		fmt.Println(mut(i))
 	}
+	net.Dial()
 	cli.Stop()
 	fmt.Println(time.Now().Sub(start))
 }
