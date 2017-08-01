@@ -1,7 +1,9 @@
 package gorpc
 
 import (
+	"strings"
 	"testing"
+	"time"
 )
 
 func upper() {}
@@ -17,7 +19,11 @@ func TestFirstLetterToLower(t *testing.T) {
 }
 
 func TestGetNameByFunc(t *testing.T) {
-	if getNameByFunc(upper) != "upper" {
-		t.Error("getNameByFunc upper", getNameByFunc(upper))
+	src := []interface{}{upper, time.Now, time.LoadLocation, strings.ToUpper, TestGetNameByFunc}
+	des := []string{"upper", "Now", "LoadLocation", "ToUpper", "TestGetNameByFunc"}
+	for i := 0; i < len(src); i++ {
+		if getNameByFunc(src[i]) != des[i] {
+			t.Errorf("getNameByFunc %s", getNameByFunc(upper))
+		}
 	}
 }

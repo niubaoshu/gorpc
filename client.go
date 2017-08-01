@@ -77,9 +77,7 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 	timer.Reset(5 * time.Second)
 
 	enc := f.encPool.Get().(*gotiny.Encoder)
-	enc.EncodeByUPtrs(params[:f.inum]...)
-	buf := enc.Bytes()
-	enc.Reset()
+	buf := enc.EncodePtr(params[:f.inum]...)
 
 	l := len(buf) - 2 //0,1字节不计算长度
 	buf[0] = byte(l >> 8)
@@ -104,8 +102,7 @@ func (f *Function) Rcall(params ...unsafe.Pointer) (err error) {
 		timer.Stop()
 		f.timerPool.Put(timer)
 		dec := f.decPool.Get().(*gotiny.Decoder)
-		dec.ResetWith(b[4:])
-		dec.DecodeByUPtr(params[f.inum:]...)
+		dec.DecodePtr(b[4:], params[f.inum:]...)
 		f.decPool.Put(dec)
 		f.Put(b)
 	case <-timer.C: //
@@ -156,7 +153,7 @@ func NewFuncs(fns ...interface{}) []Function {
 		funcs[i].inum = inum
 		funcs[i].ityps = ityps
 		funcs[i].decPool = sync.Pool{
-			New: func() interface{} { return gotiny.NewDecoderWithTypes(otpys...) },
+			New: func() interface{} { return gotiny.NewDecoderWithType(otpys...) },
 		}
 		funcs[i].chPool = sync.Pool{
 			New: func() interface{} { return make(chan []byte) },
@@ -192,8 +189,8 @@ func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
 	}()
 	getIdxFunc.encPool = sync.Pool{
 		New: func() interface{} {
-			enc := gotiny.NewEncoderWithTypes(getIdxFunc.ityps...)
-			enc.ResetWithBuf([]byte{0, 0, 0, 0, 0, 0})
+			enc := gotiny.NewEncoderWithType(getIdxFunc.ityps...)
+			enc.AppendTo([]byte{0, 0, 0, 0, 0, 0})
 			return enc
 		},
 	}
@@ -227,8 +224,8 @@ func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
 			c.chmap[f.fid] = f.safeMap
 			f.encPool = sync.Pool{
 				New: func() interface{} {
-					enc := gotiny.NewEncoderWithTypes(f.ityps...)
-					enc.ResetWithBuf([]byte{0, 0, byte(f.fid >> 8), byte(f.fid), 0, 0})
+					enc := gotiny.NewEncoderWithType(f.ityps...)
+					enc.AppendTo([]byte{0, 0, byte(f.fid >> 8), byte(f.fid), 0, 0})
 					return enc
 				},
 			}

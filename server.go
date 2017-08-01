@@ -66,7 +66,7 @@ func NewServer(funcs ...interface{}) *server {
 			for i := 0; i < inum; i++ {
 				ityps[i] = t.In(i)
 			}
-			decpool = sync.Pool{New: func() interface{} { return gotiny.NewDecoderWithTypes(ityps...) }}
+			decpool = sync.Pool{New: func() interface{} { return gotiny.NewDecoderWithType(ityps...) }}
 			valpool = sync.Pool{
 				New: func() interface{} {
 					rvs, ptrs := make([]reflect.Value, inum), make([]unsafe.Pointer, inum)
@@ -83,23 +83,21 @@ func NewServer(funcs ...interface{}) *server {
 			for i := 0; i < onum; i++ {
 				otyps[i] = t.Out(i)
 			}
-			encpool = sync.Pool{New: func() interface{} { return gotiny.NewEncoderWithTypes(otyps...) }}
+			encpool = sync.Pool{New: func() interface{} { return gotiny.NewEncoderWithType(otyps...) }}
 			fallthrough
 		case inum != 0 && onum != 0:
 			f = func(param []byte) []byte {
 				d := decpool.Get().(*gotiny.Decoder)
-				d.ResetWith(param[4:]) //0,1是fid,2,3是seq
 				vs := valpool.Get().(*vals)
-				d.DecodeByUPtr(vs.ptrs...)
+				d.DecodePtr(param[4:], vs.ptrs...) //0,1是fid,2,3是seq
 				decpool.Put(d)
 				ovs := call(vs.rvs)
 				valpool.Put(vs)
 				param = param[:6]
 				param[5], param[4], param[3], param[2] = param[3], param[2], param[1], param[0]
 				e := encpool.Get().(*gotiny.Encoder)
-				e.ResetWithBuf(param)
-				e.EncodeValues(ovs...)
-				buf := e.Bytes()
+				e.AppendTo(param)
+				buf := e.EncodeValue(ovs...)
 				encpool.Put(e)
 				l := len(buf) - 2
 				buf[0], buf[1] = byte(l>>8), byte(l)
@@ -108,9 +106,8 @@ func NewServer(funcs ...interface{}) *server {
 		case inum != 0:
 			f = func(param []byte) []byte {
 				d := decpool.Get().(*gotiny.Decoder)
-				d.ResetWith(param[4:]) //0,1是fid,2,3是seq
 				vs := valpool.Get().(*vals)
-				d.DecodeByUPtr(vs.ptrs...)
+				d.DecodePtr(param[4:], vs.ptrs...) // 0,1是fid,2,3是seq
 				decpool.Put(d)
 				call(vs.rvs)
 				valpool.Put(vs)
@@ -124,9 +121,8 @@ func NewServer(funcs ...interface{}) *server {
 				param[5], param[4], param[3], param[2] = param[3], param[2], param[1], param[0]
 				ovs := call(nil)
 				e := encpool.Get().(*gotiny.Encoder)
-				e.ResetWithBuf(param)
-				e.EncodeValues(ovs...)
-				buf := e.Bytes()
+				e.AppendTo(param)
+				buf := e.EncodeValue(ovs...)
 				encpool.Put(e)
 				l := len(buf) - 2
 				buf[0], buf[1] = byte(l>>8), byte(l)
