@@ -20,10 +20,6 @@ type (
 		fns       []func([]byte) []byte //funcsinfo里存储的数据不会修改
 		fnames    []string
 	}
-	vals struct {
-		rvs  []reflect.Value
-		ptrs []unsafe.Pointer
-	}
 )
 
 const defaultaddr = ":3345"
@@ -44,7 +40,6 @@ func NewServer(funcs ...interface{}) *server {
 			} else if fnames[i] < names[j] {
 				i++
 			} else {
-				ret[j] = -1 //没有该服务返回-1
 				j++
 			}
 		}
@@ -66,16 +61,14 @@ func NewServer(funcs ...interface{}) *server {
 			for i := 0; i < inum; i++ {
 				ityps[i] = t.In(i)
 			}
-			decpool = sync.Pool{New: func() interface{} { return gotiny.NewDecoderWithType(ityps...) }}
-			valpool = sync.Pool{
-				New: func() interface{} {
-					rvs, ptrs := make([]reflect.Value, inum), make([]unsafe.Pointer, inum)
-					for i := 0; i < inum; i++ {
-						rv := reflect.New(ityps[i]).Elem()
-						rvs[i], ptrs[i] = rv, unsafe.Pointer(rv.UnsafeAddr())
-					}
-					return &vals{rvs, ptrs}
-				},
+			decpool.New = func() interface{} { return gotiny.NewDecoderWithType(ityps...) }
+			valpool.New = func() interface{} {
+				rvs, ptrs := make([]reflect.Value, inum), make([]unsafe.Pointer, inum)
+				for i := 0; i < inum; i++ {
+					rv := reflect.New(ityps[i]).Elem()
+					rvs[i], ptrs[i] = rv, unsafe.Pointer(rv.UnsafeAddr())
+				}
+				return &vals{rvs, ptrs}
 			}
 		}
 		if onum > 0 {
@@ -83,7 +76,7 @@ func NewServer(funcs ...interface{}) *server {
 			for i := 0; i < onum; i++ {
 				otyps[i] = t.Out(i)
 			}
-			encpool = sync.Pool{New: func() interface{} { return gotiny.NewEncoderWithType(otyps...) }}
+			encpool.New = func() interface{} { return gotiny.NewEncoderWithType(otyps...) }
 		}
 		switch {
 		case inum > 0 && onum > 0:
@@ -113,7 +106,7 @@ func NewServer(funcs ...interface{}) *server {
 				call(vs.rvs)
 				valpool.Put(vs)
 				param = param[:6]
-				param[5], param[4], param[3], param[2], param[1], param[0] = param[3], param[2], param[1], param[0], 0, 4
+				param[5], param[4], param[3], param[2], param[1], param[0] = param[3], param[2], param[1], param[0], 4, 0
 				return param
 			}
 		case onum > 0:
@@ -132,7 +125,7 @@ func NewServer(funcs ...interface{}) *server {
 		default:
 			f = func(param []byte) []byte { //param 长度为4
 				param = param[:6]
-				param[5], param[4], param[3], param[2], param[1], param[0] = param[3], param[2], param[1], param[0], 0, 4
+				param[5], param[4], param[3], param[2], param[1], param[0] = param[3], param[2], param[1], param[0], 4, 0
 				call(nil)
 				return param
 			}
@@ -179,7 +172,6 @@ func (s *server) Start() {
 			go func() {
 				s.waitGroup.Add(1)
 				NewConn(conn, s).Start()
-				//utils.NewConsume(&Conn{s.exitChan, conn}, &serverHandler{conn: conn}, 10, 40, s.wg).Start()
 				s.waitGroup.Done()
 			}()
 		} else {

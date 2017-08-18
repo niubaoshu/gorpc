@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 )
 
 func getNameByPtr(ptr uintptr) string {
@@ -38,4 +39,20 @@ func firstToUpper(str string) string {
 		return string(buf) + str[n:]
 	}
 	return str
+}
+
+type vals struct {
+	rvs  []reflect.Value
+	ptrs []unsafe.Pointer
+}
+
+func max(list []int) int {
+	m := 0
+	l := len(list)
+	for i := 0; i < l; i++ {
+		if list[i] > m {
+			m = list[i]
+		}
+	}
+	return m
 }

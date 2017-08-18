@@ -2,6 +2,7 @@ package gorpc
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -15,8 +16,10 @@ import (
 )
 
 var (
+	rtError         = reflect.TypeOf((*error)(nil)).Elem()
 	ErrTimeout      = errors.New("the revert packet is timeout")
-	ErrNoFunc       = errors.New("the func is not exist on server")
+	ErrTimeoutR     = reflect.ValueOf(ErrTimeout).Convert(rtError)
+	ErrNoFunc       = reflect.ValueOf(errors.New("the func is not exist on server")).Convert(rtError)
 	ErrClientClosed = errors.New("the client is closed")
 )
 
@@ -29,336 +32,64 @@ type (
 		rwc      io.ReadWriteCloser
 		// TODO 报错后返回给当前所有调用中的函数
 		ErrHandler func(error)
-		fis        fnsInfos
-	}
-	sdk struct {
-		fns []func(...unsafe.Pointer) error
-		c   *Client
-	}
-
-	fnsInfos struct {
-		fnum int
-		fs   []function
-		ns   []string
-	}
-
-	function struct {
-		inum      int
-		onum      int
-		ityps     []reflect.Type
-		decPool   sync.Pool
-		chPool    sync.Pool
-		timerPool sync.Pool
-		sm        safeMap
+		bufs       []bytesPool
+		fns        []interface{}
+		names      []string
 	}
 )
 
-func getfns(fns []function, fids []int, w io.Writer) []func(...unsafe.Pointer) error {
-	//defer func() {
-	//	if e := recover(); e != nil {
-	//		if er, ok := e.(error); ok {
-	//			err = er
-	//		} else {
-	//			err = fmt.Errorf("%v", e)
-	//		}
-	//	}
-	//}()
+func NewClient(names []string, fns ...interface{}) *Client {
 	l := len(fns)
-	rets := make([]func(...unsafe.Pointer) error, l)
 	for i := 0; i < l; i++ {
-		fn, id := &fns[i], fids[i]
-		if id < 0 {
-			rets[i] = func(...unsafe.Pointer) error {
-				return ErrNoFunc
-			}
-			continue
-		}
-		encs, bufs, seq := sync.Pool{}, sync.Pool{}, uint64(0)
-		inum, onum := fn.inum, fn.onum
-		decs, chs, timers, sm := &fn.decPool, &fn.chPool, &fn.timerPool, &fns[i].sm
-		if inum > 0 {
-			encs.New = func() interface{} {
-				enc := gotiny.NewEncoderWithType(fn.ityps...)
-				buf := [32]byte{0, 0, byte(id >> 8), byte(id), 0, 0}
-				enc.AppendTo(buf[:6])
-				return enc
-			}
-		}
-		if inum == 0 {
-			bufs.New = func() interface{} { return []byte{0, 4, byte(id >> 8), byte(id), 0, 0} } //0,1字节不计算长度,定长是4
-		}
-
-		switch {
-		case inum > 0 && onum > 0:
-			rets[i] = func(params ...unsafe.Pointer) (err error) {
-				enc := encs.Get().(*gotiny.Encoder)
-				buf := enc.EncodePtr(params[:inum]...)
-
-				l := len(buf) - 2 //0,1字节不计算长度
-				buf[0] = byte(l >> 8)
-				buf[1] = byte(l)
-				seq := atomic.AddUint64(&seq, 1) & 0xFFFF // sync
-				buf[4] = byte(seq >> 8)
-				buf[5] = byte(seq)
-
-				rchan := chs.Get().(chan []byte)
-				sm.set(seq, rchan) // sync
-
-				if _, err = w.Write(buf); err != nil {
-					encs.Put(enc)
-					return err
-				}
-				encs.Put(enc)
-				//log.Println("client:发送了  ", buf)
-
-				timer := timers.Get().(*time.Timer)
-				timer.Reset(5 * time.Second)
-
-				select {
-				case b := <-rchan:
-					sm.del(seq) // sync
-					chs.Put(rchan)
-					timer.Stop()
-					timers.Put(timer)
-					dec := decs.Get().(*gotiny.Decoder)
-					dec.DecodePtr(b[4:], params[inum:]...)
-					decs.Put(dec)
-					bufPool.Put(b)
-					return
-				case <-timer.C: // 超时
-					//TODO 如果rchan 里有值(超市后未删除前放入值了)需要处理
-					if b := sm.delhas(seq, rchan); b != nil {
-						bufPool.Put(b)
-					} // sync
-					chs.Put(rchan)
-					timer.Stop()
-					timers.Put(timer)
-					return ErrTimeout
-				}
-			}
-		case inum > 0:
-			rets[i] = func(params ...unsafe.Pointer) (err error) {
-				enc := encs.Get().(*gotiny.Encoder)
-				buf := enc.EncodePtr(params[:inum]...)
-
-				l := len(buf) - 2 //0,1字节不计算长度
-				buf[0] = byte(l >> 8)
-				buf[1] = byte(l)
-				seq := atomic.AddUint64(&seq, 1) & 0xFFFF // sync
-				buf[4] = byte(seq >> 8)
-				buf[5] = byte(seq)
-
-				rchan := chs.Get().(chan []byte)
-				sm.set(seq, rchan) // sync
-
-				if _, err = w.Write(buf); err != nil {
-					encs.Put(enc)
-					return err
-				}
-				encs.Put(enc)
-				//log.Println("client:发送了", buf)
-
-				timer := timers.Get().(*time.Timer)
-				timer.Reset(5 * time.Second)
-
-				select {
-				case b := <-rchan:
-					sm.del(seq) // sync
-					bufPool.Put(b)
-				case <-timer.C: // 超时
-					//TODO 如果rchan 里有值(超市后未删除前放入值了)需要处理
-					if b := sm.delhas(seq, rchan); b != nil {
-						bufPool.Put(b)
-					} // sync
-					err = ErrTimeout
-				}
-				chs.Put(rchan)
-				timer.Stop()
-				timers.Put(timer)
-				return
-			}
-		case onum > 0:
-			rets[i] = func(params ...unsafe.Pointer) (err error) {
-				buf := bufs.Get().([]byte)
-				seq := atomic.AddUint64(&seq, 1) & 0xFFFF // sync
-				buf[4] = byte(seq >> 8)
-				buf[5] = byte(seq)
-
-				rchan := chs.Get().(chan []byte)
-				sm.set(seq, rchan) // sync
-
-				if _, err = w.Write(buf); err != nil {
-					bufs.Put(buf)
-					return err
-				}
-				//log.Println("client:发送了", buf)
-				bufs.Put(buf)
-
-				timer := fn.timerPool.Get().(*time.Timer)
-				timer.Reset(5 * time.Second)
-
-				select {
-				case b := <-rchan:
-					sm.del(seq) // sync
-					chs.Put(rchan)
-					timer.Stop()
-					timers.Put(timer)
-					dec := decs.Get().(*gotiny.Decoder)
-					dec.DecodePtr(b[4:], params[inum:]...)
-					decs.Put(dec)
-					bufPool.Put(b)
-					return
-				case <-timer.C: // 超时
-					//TODO 如果rchan 里有值(超市后未删除前放入值了)需要处理
-					if b := sm.delhas(seq, rchan); b != nil {
-						bufPool.Put(b)
-					} // sync
-					chs.Put(rchan)
-					timer.Stop()
-					timers.Put(timer)
-					return ErrTimeout
-				}
-			}
-		default:
-			rets[i] = func(params ...unsafe.Pointer) (err error) {
-				buf := bufs.Get().([]byte)
-				seq := atomic.AddUint64(&seq, 1) & 0xFFFF // sync
-				buf[4] = byte(seq >> 8)
-				buf[5] = byte(seq)
-
-				rchan := chs.Get().(chan []byte)
-				sm.set(seq, rchan) // sync
-
-				if _, err = w.Write(buf); err != nil {
-					bufs.Put(buf)
-					return err
-				}
-				//log.Println("client:发送了", buf)
-				bufs.Put(buf)
-
-				timer := timers.Get().(*time.Timer)
-				timer.Reset(5 * time.Second)
-
-				select {
-				case b := <-rchan:
-					sm.del(seq) // sync
-					bufPool.Put(b)
-				case <-timer.C: // 超时
-					//TODO 如果rchan 里有值(超市后未删除前放入值了)需要处理
-					if b := sm.delhas(seq, rchan); b != nil {
-						bufPool.Put(b)
-					} // sync
-					err = ErrTimeout
-				}
-				chs.Put(rchan)
-				timer.Stop()
-				timers.Put(timer)
-				return
-			}
+		ft := reflect.TypeOf(fns[i])
+		if ft.Kind() != reflect.Ptr && ft.Elem().Kind() != reflect.Func {
+			panic("params must pointer of function")
 		}
 	}
-	return rets
-}
-
-func NewClient(fis fnsInfos) *Client {
 	return &Client{
+		fns:        fns,
 		exitChan:   make(chan struct{}),
-		rchan:      make(chan []byte, fis.fnum*100),
-		ErrHandler: func(err error) { log.Println(err) },
-		fis:        fis,
+		rchan:      make(chan []byte, 100*l),
+		ErrHandler: defaultErr,
+		names:      names,
 	}
 }
-func (c *Client) StartIO(rwc io.ReadWriteCloser) (*sdk, error) {
-	c.wg.Add(2)
+
+func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
 	c.rwc = rwc
+	c.wg.Add(2)
 	go c.loopRead(rwc)
-	fids, err := c.getFids(c.fis.ns)
+	fids, err := c.getFids(c.names)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	l, fns := len(c.fns), c.fns //0号位置不放内容
+	c.sms = make([]*safeMap, l+1)
+	for i := 0; i < l; i++ {
+		c.sms[fids[i]] = makefunc(fns[i], fids[i], rwc)
 	}
 	go c.receive()
-	s := &sdk{
-		fns: getfns(c.fis.fs, fids, rwc),
-		c:   c,
-	}
-	l := c.fis.fnum
-	fs := c.fis.fs
-	max := 0
-	for i := 0; i < l; i++ {
-		if fids[i] > max {
-			max = fids[i]
-		}
-	}
-	c.sms = make([]*safeMap, max+1) //0号位置不放内容
-	sms := c.sms
-	for i := 0; i < l; i++ {
-		if fids[i] < 1 {
-			break
-		}
-		sms[fids[i]] = &fs[i].sm
-	}
-	return s, nil
+	return nil
 }
 
-func GetFnsInfo(sdk interface{}) fnsInfos {
-	t := reflect.TypeOf(sdk)
-	nm := t.NumMethod()
-	fs, ns := make([]function, nm), make([]string, nm)
-	for i := 0; i < nm; i++ {
-		m := t.Method(i)
-		mt := m.Type
-		ns[i] = m.Name
-		inum, onum := mt.NumIn()-1, mt.NumOut()-1 // 方法拥有者不参与编码,error 不参与解码
-		f := function{
-			inum:   inum,
-			onum:   onum,
-			chPool: sync.Pool{New: func() interface{} { return make(chan []byte) }},
-			timerPool: sync.Pool{
-				New: func() interface{} {
-					timer := time.NewTimer(5 * time.Second)
-					timer.Stop()
-					return timer
-				},
-			},
-		}
-		if inum != 0 {
-			ityps := make([]reflect.Type, inum)
-			for i := 0; i < inum; i++ {
-				ityps[i] = mt.In(i + 1) // 方法拥有者不参与编码
-			}
-			f.ityps = ityps
-		}
-		if onum != 0 {
-			otpys := make([]reflect.Type, onum)
-			for i := 0; i < onum; i++ {
-				otpys[i] = mt.Out(i)
-			}
-			f.decPool.New = func() interface{} { return gotiny.NewDecoderWithType(otpys...) }
-		}
-		f.sm.m = make(map[uint64]chan []byte)
-		fs[i] = f
-	}
-	return fnsInfos{nm, fs, ns}
-}
-
-func (c *Client) StartConn(conn net.Conn) (*sdk, error) {
+func (c *Client) StartConn(conn net.Conn) error {
 	return c.StartIO(conn)
 }
 
-func (c *Client) DialTCP(addr string) (*sdk, error) {
+func (c *Client) DialTCP(addr string) error {
 	return c.Dial("tcp", addr)
 }
 
-func (c *Client) Dial(network, addr string) (*sdk, error) {
+func (c *Client) Dial(network, addr string) error {
 	conn, err := net.Dial(network, addr)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	log.Printf("链接     %s 成功.\n", conn.RemoteAddr())
 	return c.StartConn(conn)
 }
 
-func (c *Client) Start() (*sdk, error) {
+func (c *Client) Start() error {
 	return c.DialTCP(defaultaddr)
 }
 
@@ -391,7 +122,7 @@ func (c *Client) receive() {
 		if ch, has := m[int(pack[0])<<8|int(pack[1])].get(uint64(pack[2])<<8 | uint64(pack[3])); has {
 			ch <- pack
 		} else {
-			// TODO 没有说明超时了暂时丢弃。
+			// TODO 没有则说明超时了暂时丢弃。
 			bufPool.Put(pack)
 		}
 	}
@@ -415,12 +146,12 @@ func (c *Client) Stop() {
 
 func (c *Client) getFids(names []string) (fids []int, err error) {
 	enc := gotiny.NewEncoder(names)
-	enc.AppendTo([]byte{0, 0, 0, 0, 0, 0})
+	enc.AppendTo(make([]byte, 32)[:6])
 	buf := enc.EncodePtr(unsafe.Pointer(&names))
 	l := len(buf) - 2 //0,1字节不计算长度
 	buf[0] = byte(l >> 8)
 	buf[1] = byte(l)
-	if _, err = c.rwc.Write(buf); err != nil {
+	if _, err := c.rwc.Write(buf); err != nil {
 		return nil, err
 	}
 	tick := time.NewTicker(5 * time.Second)
@@ -428,7 +159,264 @@ func (c *Client) getFids(names []string) (fids []int, err error) {
 	case pack := <-c.rchan:
 		gotiny.Decodes(pack[4:], &fids)
 	case <-tick.C:
-		err = ErrTimeout
+		return nil, ErrTimeout
 	}
 	return
+}
+
+func defaultErr(err error) {
+	fmt.Println(err)
+}
+
+func makefunc(fn interface{}, id int, w io.Writer) (sm *safeMap) {
+	var f func([]reflect.Value) []reflect.Value
+	fnv, fnt := reflect.ValueOf(fn), reflect.TypeOf(fn).Elem()
+	inum, onum := fnt.NumIn(), fnt.NumOut()
+	dnum := onum - 1
+	otyps := make([]reflect.Type, onum)
+	for i := 0; i < onum; i++ {
+		otyps[i] = fnt.Out(i)
+	}
+	var (
+		encPool   sync.Pool
+		decPool   sync.Pool
+		bytespool sync.Pool
+		chPool    = sync.Pool{
+			New: func() interface{} {
+				return make(chan []byte)
+			},
+		}
+		timerPool = sync.Pool{
+			New: func() interface{} {
+				timer := time.NewTimer(5 * time.Second)
+				timer.Stop()
+				return timer
+			},
+		}
+		seq   uint64
+		ityps []reflect.Type
+	)
+
+	if id < 1 {
+		f = func([]reflect.Value) []reflect.Value {
+			ret := makeRet(otyps)
+			ret.rvs[dnum] = ErrNoFunc
+			return ret.rvs
+		}
+		fnv.Elem().Set(reflect.MakeFunc(fnt, f))
+		return
+	}
+	sm = &safeMap{m: make(map[uint64]chan []byte)}
+
+	if dnum > 0 {
+		decPool.New = func() interface{} { return gotiny.NewDecoderWithType(otyps[:dnum]...) }
+	}
+
+	if inum > 0 {
+		ityps = make([]reflect.Type, inum)
+		for i := 0; i < inum; i++ {
+			ityps[i] = fnt.In(i)
+		}
+		encPool.New = func() interface{} {
+			enc := gotiny.NewEncoderWithType(ityps...)
+			buf := [32]byte{0, 0, byte(id >> 8), byte(id), 0, 0}
+			enc.AppendTo(buf[:6])
+			return enc
+		}
+
+	}
+
+	if inum == 0 {
+		bytespool.New = func() interface{} { return []byte{0, 4, byte(id >> 8), byte(id), 0, 0} } //0,1字节不计算长度,定长是4
+	}
+
+	switch {
+	case inum > 0 && dnum > 0:
+		f = func(ins []reflect.Value) []reflect.Value {
+			enc := encPool.Get().(*gotiny.Encoder)
+			buf := enc.EncodeValue(ins...)
+
+			l := len(buf) - 2 //0,1字节不计算长度
+			buf[0], buf[1] = byte(l>>8), byte(l)
+			seq := atomic.AddUint64(&seq, 1) & 0xFFFF // sync
+			buf[4], buf[5] = byte(seq>>8), byte(seq)
+
+			rchan := chPool.Get().(chan []byte)
+			sm.set(seq, rchan) // sync
+
+			ret := makeRet(otyps)
+			if _, err := w.Write(buf); err != nil {
+				encPool.Put(enc)
+				sm.del(seq)
+				chPool.Put(rchan)
+				ret.rvs[dnum] = reflect.ValueOf(err)
+				return ret.rvs
+			}
+			encPool.Put(enc)
+			//log.Println("client:发送了  ", buf)
+
+			timer := timerPool.Get().(*time.Timer)
+			timer.Reset(5 * time.Second)
+
+			select {
+			case b := <-rchan:
+				timer.Stop()
+				timerPool.Put(timer)
+				sm.del(seq) // sync
+				chPool.Put(rchan)
+				dec := decPool.Get().(*gotiny.Decoder)
+				dec.DecodePtr(b[4:], ret.ptrs...)
+				decPool.Put(dec)
+				bufPool.Put(b)
+				return ret.rvs
+			case <-timer.C: // 超时
+				// TODO 如果rchan 里有值(超时后未删除前放入值了)需要处理
+				if b := sm.delhas(seq, rchan); b != nil {
+					bufPool.Put(b)
+				} // sync
+				chPool.Put(rchan)
+				timer.Stop()
+				timerPool.Put(timer)
+				ret.rvs[dnum] = ErrTimeoutR
+				return ret.rvs
+			}
+		}
+	case inum > 0:
+		f = func(ins []reflect.Value) []reflect.Value {
+			enc := encPool.Get().(*gotiny.Encoder)
+			buf := enc.EncodeValue(ins...)
+
+			l := len(buf) - 2 //0,1字节不计算长度
+			buf[0], buf[1] = byte(l>>8), byte(l)
+			seq := atomic.AddUint64(&seq, 1) & 0xFFFF // sync
+			buf[4], buf[5] = byte(seq>>8), byte(seq)
+
+			rchan := chPool.Get().(chan []byte)
+			sm.set(seq, rchan) // sync
+
+			ret := makeRet(otyps)
+			if _, err := w.Write(buf); err != nil {
+				encPool.Put(enc)
+				sm.del(seq)
+				chPool.Put(rchan)
+				ret.rvs[dnum] = reflect.ValueOf(err)
+				return ret.rvs
+			}
+			encPool.Put(enc)
+			//log.Println("client:发送了", buf)
+
+			timer := timerPool.Get().(*time.Timer)
+			timer.Reset(5 * time.Second)
+			select {
+			case b := <-rchan:
+				sm.del(seq) // sync
+				bufPool.Put(b)
+			case <-timer.C: // 超时
+				//TODO 如果rchan 里有值(超市后未删除前放入值了)需要处理
+				if b := sm.delhas(seq, rchan); b != nil {
+					bufPool.Put(b)
+				} // sync
+				ret.rvs[dnum] = ErrTimeoutR
+			}
+			chPool.Put(rchan)
+			timer.Stop()
+			timerPool.Put(timer)
+			return ret.rvs
+		}
+	case dnum > 0:
+		f = func(ins []reflect.Value) []reflect.Value {
+			buf := bytespool.Get().([]byte)
+			seq := atomic.AddUint64(&seq, 1) & 0xFFFF // sync
+			buf[4], buf[5] = byte(seq>>8), byte(seq)
+
+			rchan := chPool.Get().(chan []byte)
+			sm.set(seq, rchan) // sync
+
+			ret := makeRet(otyps)
+			if _, err := w.Write(buf); err != nil {
+				sm.del(seq)
+				chPool.Put(rchan)
+				bufPool.Put(buf)
+				ret.rvs[dnum] = reflect.ValueOf(err)
+				return ret.rvs
+			}
+			//log.Println("client:发送了", buf)
+			bytespool.Put(buf)
+
+			timer := timerPool.Get().(*time.Timer)
+			timer.Reset(5 * time.Second)
+			select {
+			case b := <-rchan:
+				sm.del(seq) // sync
+				chPool.Put(rchan)
+				timer.Stop()
+				timerPool.Put(timer)
+				dec := decPool.Get().(*gotiny.Decoder)
+				dec.DecodePtr(b[4:], ret.ptrs...)
+				decPool.Put(dec)
+				bufPool.Put(b)
+				return ret.rvs
+			case <-timer.C: // 超时
+				//TODO 如果rchan 里有值(超市后未删除前放入值了)需要处理
+				if b := sm.delhas(seq, rchan); b != nil {
+					bufPool.Put(b)
+				} // sync
+				chPool.Put(rchan)
+				timer.Stop()
+				timerPool.Put(timer)
+				ret.rvs[dnum] = ErrTimeoutR
+				return ret.rvs
+			}
+		}
+	default:
+		f = func(ins []reflect.Value) []reflect.Value {
+			buf := bytespool.Get().([]byte)
+			seq := atomic.AddUint64(&seq, 1) & 0xFFFF // sync
+			buf[4], buf[5] = byte(seq>>8), byte(seq)
+
+			rchan := chPool.Get().(chan []byte)
+			sm.set(seq, rchan) // sync
+
+			ret := makeRet(otyps)
+			if _, err := w.Write(buf); err != nil {
+				bufPool.Put(buf)
+				sm.del(seq)
+				chPool.Put(rchan)
+				ret.rvs[dnum] = reflect.ValueOf(err)
+				return ret.rvs
+			}
+			//log.Println("client:发送了", buf)
+			bytespool.Put(buf)
+
+			timer := timerPool.Get().(*time.Timer)
+			timer.Reset(5 * time.Second)
+			select {
+			case b := <-rchan:
+				sm.del(seq) // sync
+				bufPool.Put(b)
+			case <-timer.C: // 超时
+				//TODO 如果rchan 里有值(超市后未删除前放入值了)需要处理
+				if b := sm.delhas(seq, rchan); b != nil {
+					bufPool.Put(b)
+				} // sync
+				ret.rvs[dnum] = ErrTimeoutR
+			}
+			chPool.Put(rchan)
+			timer.Stop()
+			timerPool.Put(timer)
+			return ret.rvs
+		}
+	}
+	fnv.Elem().Set(reflect.MakeFunc(fnt, f))
+	return sm
+}
+
+func makeRet(otyps []reflect.Type) vals {
+	l := len(otyps)
+	rvs, ptrs := make([]reflect.Value, l), make([]unsafe.Pointer, l)
+	for i := 0; i < l; i++ {
+		rv := reflect.New(otyps[i]).Elem()
+		rvs[i], ptrs[i] = rv, unsafe.Pointer(rv.UnsafeAddr())
+	}
+	return vals{rvs, ptrs[:l-1]}
 }
