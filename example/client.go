@@ -6,16 +6,23 @@ import (
 	"fmt"
 	"time"
 
+	"net"
+
 	"github.com/niubaoshu/gorpc"
 )
 
 var (
-	fns [6]*gorpc.Function
+	fns, ns = gorpc.GetFnsInfo((*sdk)(nil))
 )
+
+type sdk struct {
+}
+
+func Dial() *sdk { return &sdk{} }
 
 // 该文件是自动生成的（除了main函数），还没有实现
 func main() {
-	cli := gorpc.NewClient(fns[:], plus, sub, echo, add, mut, slow)
+	cli := gorpc.NewClient(fns)
 	cli.Start()
 	start := time.Now()
 	for i := 0; i < 10; i++ {
@@ -25,6 +32,7 @@ func main() {
 		fmt.Println(add(i))
 		fmt.Println(mut(i))
 	}
+	net.Dial()
 	cli.Stop()
 	fmt.Println(time.Now().Sub(start))
 }
@@ -56,5 +64,10 @@ func mut(a ...int) (c int, err error) {
 
 func slow(msg string) (rmsg string, err error) {
 	err = (fns[5]).Rcall(unsafe.Pointer(&msg), unsafe.Pointer(&rmsg))
+	return
+}
+
+func now() (n time.Time, err error) {
+	//err = (fns[6]).Rcall(unsafe.Pointer(&n))
 	return
 }

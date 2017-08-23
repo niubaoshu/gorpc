@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	gorpc.NewServer(plus, sub, echo, add, mut, slow).Start()
+	gorpc.NewServer(plus, sub, echo, add, mut, slow, now).Start()
 }
 
 func plus(a, b int) int {
@@ -40,4 +40,8 @@ func mut(a ...int) (c int) {
 func slow(msg string) string {
 	time.Sleep(10 * time.Microsecond)
 	return msg
+}
+
+func now() time.Time {
+	return time.Now()
 }

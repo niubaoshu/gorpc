@@ -6,21 +6,19 @@ import (
 	"reflect"
 	"sync"
 
+	"unsafe"
+
 	"github.com/niubaoshu/gotiny"
 )
 
 type (
 	server struct {
 		funcSum   int
-		exitChan  chan struct{}   // notify all goroutines to shutdown
-		waitGroup *sync.WaitGroup // wait for all goroutines
+		exitChan  chan struct{}  // notify all goroutines to shutdown
+		waitGroup sync.WaitGroup // wait for all goroutines
 		addr      string
-		functions []func([]byte) []byte //funcsinfo里存储的数据不会修改
-	}
-	scall struct {
-		dec  *gotiny.Decoder
-		enc  *gotiny.Encoder
-		vals []reflect.Value
+		fns       []func([]byte) []byte //funcsinfo里存储的数据不会修改
+		fnames    []string
 	}
 )
 
@@ -29,21 +27,36 @@ const defaultaddr = ":3345"
 // Start starts service
 
 func NewServer(funcs ...interface{}) *server {
-	fns := make([]func([]byte) []byte, len(funcs))
-
-	for idx, fn := range funcs {
-		t := reflect.TypeOf(fn)
-		v := reflect.ValueOf(fn)
-		inum := t.NumIn()
-		itpys := make([]reflect.Type, inum)
-		for i := 0; i < inum; i++ {
-			itpys[i] = t.In(i)
+	l := len(funcs) + 1
+	fs, fnames := make([]interface{}, l), make([]string, l)
+	fs[0] = func(names []string) []int {
+		lns := len(names)
+		ret := make([]int, lns)
+		for i, j := 1, 0; i < l && j < lns; { // i=1 不要第一个
+			if fnames[i] == names[j] {
+				ret[j] = i
+				i++
+				j++
+			} else if fnames[i] < names[j] {
+				i++
+			} else {
+				j++
+			}
 		}
-		onum := t.NumOut()
-		otpys := make([]reflect.Type, onum)
-		for i := 0; i < onum; i++ {
-			otpys[i] = t.Out(i)
+		return ret
+	}
+	copy(fs[1:], funcs)
+	fns := make([]func([]byte) []byte, l)
+	for idx, fn := range fs {
+		t, v := reflect.TypeOf(fn), reflect.ValueOf(fn)
+		inum, onum, call := t.NumIn(), t.NumOut(), v.Call
+		var ityps, otyps []reflect.Type
+		var decpool, encpool, valpool sync.Pool
+		var f func([]byte) []byte
+		if t.IsVariadic() {
+			call = v.CallSlice
 		}
+<<<<<<< HEAD
 
 		calls := sync.Pool{
 			New: func() interface{} {
@@ -56,9 +69,24 @@ func NewServer(funcs ...interface{}) *server {
 					dec:  dec,
 					enc:  gotiny.NewEncoderWithTypes(otpys...),
 					vals: ivs,
+=======
+		if inum > 0 {
+			ityps = make([]reflect.Type, inum)
+			for i := 0; i < inum; i++ {
+				ityps[i] = t.In(i)
+			}
+			decpool.New = func() interface{} { return gotiny.NewDecoderWithType(ityps...) }
+			valpool.New = func() interface{} {
+				rvs, ptrs := make([]reflect.Value, inum), make([]unsafe.Pointer, inum)
+				for i := 0; i < inum; i++ {
+					rv := reflect.New(ityps[i]).Elem()
+					rvs[i], ptrs[i] = rv, unsafe.Pointer(rv.UnsafeAddr())
+>>>>>>> func
 				}
-			},
+				return &vals{rvs, ptrs}
+			}
 		}
+<<<<<<< HEAD
 		call := v.Call
 		if t.IsVariadic() {
 			call = v.CallSlice
@@ -79,16 +107,83 @@ func NewServer(funcs ...interface{}) *server {
 			buf[1] = byte(l)
 			calls.Put(c)
 			return buf
+=======
+		if onum > 0 {
+			otyps = make([]reflect.Type, onum)
+			for i := 0; i < onum; i++ {
+				otyps[i] = t.Out(i)
+			}
+			encpool.New = func() interface{} { return gotiny.NewEncoderWithType(otyps...) }
 		}
+		switch {
+		case inum > 0 && onum > 0:
+			f = func(param []byte) []byte {
+				d := decpool.Get().(*gotiny.Decoder)
+				vs := valpool.Get().(*vals)
+				d.DecodePtr(param[4:], vs.ptrs...) //0,1是fid,2,3是seq
+				decpool.Put(d)
+				ovs := call(vs.rvs)
+				valpool.Put(vs)
+				param = param[:6]
+				param[5], param[4], param[3], param[2] = param[3], param[2], param[1], param[0]
+				e := encpool.Get().(*gotiny.Encoder)
+				e.AppendTo(param)
+				buf := e.EncodeValue(ovs...)
+				encpool.Put(e)
+				l := len(buf) - 2
+				buf[0], buf[1] = byte(l>>8), byte(l)
+				return buf
+			}
+		case inum > 0:
+			f = func(param []byte) []byte {
+				d := decpool.Get().(*gotiny.Decoder)
+				vs := valpool.Get().(*vals)
+				d.DecodePtr(param[4:], vs.ptrs...) // 0,1是fid,2,3是seq
+				decpool.Put(d)
+				call(vs.rvs)
+				valpool.Put(vs)
+				param = param[:6]
+				param[5], param[4], param[3], param[2], param[1], param[0] = param[3], param[2], param[1], param[0], 4, 0
+				return param
+			}
+		case onum > 0:
+			f = func(param []byte) []byte { //param 长度为4
+				param = param[:6]
+				param[5], param[4], param[3], param[2] = param[3], param[2], param[1], param[0]
+				ovs := call(nil)
+				e := encpool.Get().(*gotiny.Encoder)
+				e.AppendTo(param)
+				buf := e.EncodeValue(ovs...)
+				encpool.Put(e)
+				l := len(buf) - 2
+				buf[0], buf[1] = byte(l>>8), byte(l)
+				return buf
+			}
+		default:
+			f = func(param []byte) []byte { //param 长度为4
+				param = param[:6]
+				param[5], param[4], param[3], param[2], param[1], param[0] = param[3], param[2], param[1], param[0], 4, 0
+				call(nil)
+				return param
+			}
+		}
+		name := firstToUpper(getNameByPtr(v.Pointer()))
+		for idx > 1 && name < fnames[idx-1] {
+			fnames[idx] = fnames[idx-1]
+			fns[idx] = fns[idx-1]
+			idx--
+>>>>>>> func
+		}
+		fnames[idx] = name
+		fns[idx] = f
 	}
-	s := &server{
-		funcSum:   len(funcs),
-		exitChan:  make(chan struct{}),
-		waitGroup: new(sync.WaitGroup),
-		addr:      defaultaddr,
-		functions: fns,
+	return &server{
+		funcSum:  l,
+		exitChan: make(chan struct{}),
+		addr:     defaultaddr,
+		fns:      fns,
+		fnames:   fnames,
 	}
-	return s
 }
 
 func (s *server) Start() {
@@ -108,14 +203,13 @@ func (s *server) Start() {
 			log.Println(err)
 		}
 	}()
-	log.Println("监听地址", s.addr, "成功")
+	log.Println("监听地址", s.addr, "成功,开始提供服务:", s.fnames[1:])
 	for {
 		if conn, err := listener.AcceptTCP(); err == nil {
 			log.Println("收到连接", conn.RemoteAddr())
 			go func() {
 				s.waitGroup.Add(1)
 				NewConn(conn, s).Start()
-				//utils.NewConsume(&Conn{s.exitChan, conn}, &serverHandler{conn: conn}, 10, 40, s.wg).Start()
 				s.waitGroup.Done()
 			}()
 		} else {
