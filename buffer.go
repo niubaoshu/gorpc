@@ -79,7 +79,3 @@ func (b *bufReader) Read(p []byte) (n int, err error) {
 	b.r += n
 	return n, nil
 }
-
-func putByte(b []byte) {
-	BytesPool.Put(b)
-}

@@ -56,20 +56,6 @@ func NewServer(funcs ...interface{}) *server {
 		if t.IsVariadic() {
 			call = v.CallSlice
 		}
-<<<<<<< HEAD
-
-		calls := sync.Pool{
-			New: func() interface{} {
-				ivs := make([]reflect.Value, len(itpys))
-				for i := 0; i < len(itpys); i++ {
-					ivs[i] = reflect.New(itpys[i]).Elem()
-				}
-				dec := gotiny.NewDecoderWithTypes(itpys...)
-				return &scall{
-					dec:  dec,
-					enc:  gotiny.NewEncoderWithTypes(otpys...),
-					vals: ivs,
-=======
 		if inum > 0 {
 			ityps = make([]reflect.Type, inum)
 			for i := 0; i < inum; i++ {
@@ -81,33 +67,10 @@ func NewServer(funcs ...interface{}) *server {
 				for i := 0; i < inum; i++ {
 					rv := reflect.New(ityps[i]).Elem()
 					rvs[i], ptrs[i] = rv, unsafe.Pointer(rv.UnsafeAddr())
->>>>>>> func
 				}
 				return &vals{rvs, ptrs}
 			}
 		}
-<<<<<<< HEAD
-		call := v.Call
-		if t.IsVariadic() {
-			call = v.CallSlice
-		}
-		fns[idx] = func(param []byte) []byte {
-			c := calls.Get().(*scall)
-			c.dec.ResetWith(param[4:])
-			c.dec.DecodeValues(c.vals...)
-			param[5] = param[3]
-			param[4] = param[2]
-			param[3] = param[1]
-			param[2] = param[0]
-			c.enc.ResetWithBuf(param[:6]) //前四个用来存放长度和函数id,后面是序列号
-			c.enc.EncodeValues(call(c.vals)...)
-			buf := c.enc.Bytes()
-			l := len(buf) - 2
-			buf[0] = byte(l >> 8)
-			buf[1] = byte(l)
-			calls.Put(c)
-			return buf
-=======
 		if onum > 0 {
 			otyps = make([]reflect.Type, onum)
 			for i := 0; i < onum; i++ {
@@ -172,7 +135,6 @@ func NewServer(funcs ...interface{}) *server {
 			fnames[idx] = fnames[idx-1]
 			fns[idx] = fns[idx-1]
 			idx--
->>>>>>> func
 		}
 		fnames[idx] = name
 		fns[idx] = f

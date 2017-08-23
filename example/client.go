@@ -1,29 +1,21 @@
 package main
 
 import (
-	"unsafe"
-
 	"fmt"
 	"time"
 
-	"net"
+	"log"
 
 	"github.com/niubaoshu/gorpc"
 )
 
-var (
-	fns, ns = gorpc.GetFnsInfo((*sdk)(nil))
-)
-
-type sdk struct {
-}
-
-func Dial() *sdk { return &sdk{} }
-
 // 该文件是自动生成的（除了main函数），还没有实现
 func main() {
-	cli := gorpc.NewClient(fns)
-	cli.Start()
+	cli := gorpc.NewClient([]string{"Add", "Echo", "Mut", "Now", "Plus", "Sub"}, &add, &echo, &mut, &now, &plus, &sub)
+	err := cli.Start()
+	if err != nil {
+		log.Fatal(err)
+	}
 	start := time.Now()
 	for i := 0; i < 10; i++ {
 		fmt.Println(plus(i, i*i))
@@ -31,43 +23,18 @@ func main() {
 		fmt.Println(echo("sdfsdfsdf"))
 		fmt.Println(add(i))
 		fmt.Println(mut(i))
+		fmt.Println(now())
 	}
-	net.Dial()
 	cli.Stop()
 	fmt.Println(time.Now().Sub(start))
 }
 
-func plus(a, b int) (c int, err error) {
-	err = (fns[0]).Rcall(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&c))
-	return
-}
-
-func sub(a, b int) (c int, err error) {
-	err = (fns[1]).Rcall(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&c))
-	return
-}
-
-func echo(msg string) (rmsg string, err error) {
-	err = (fns[2]).Rcall(unsafe.Pointer(&msg), unsafe.Pointer(&rmsg))
-	return
-}
-
-func add(a ...int) (c int, err error) {
-	err = (fns[3]).Rcall(unsafe.Pointer(&a), unsafe.Pointer(&c))
-	return
-}
-
-func mut(a ...int) (c int, err error) {
-	err = (fns[4]).Rcall(unsafe.Pointer(&a), unsafe.Pointer(&c))
-	return
-}
-
-func slow(msg string) (rmsg string, err error) {
-	err = (fns[5]).Rcall(unsafe.Pointer(&msg), unsafe.Pointer(&rmsg))
-	return
-}
-
-func now() (n time.Time, err error) {
-	//err = (fns[6]).Rcall(unsafe.Pointer(&n))
-	return
-}
+var (
+	plus func(int, int) (int, error)
+	sub  func(int, int) (int, error)
+	echo func(string) (string, error)
+	add  func(...int) (int, error)
+	mut  func(...int) (int, error)
+	slow func(string) (string, error)
+	now  func() (time.Time, error)
+)

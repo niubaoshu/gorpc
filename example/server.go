@@ -7,29 +7,29 @@ import (
 )
 
 func main() {
-	gorpc.NewServer(plus, sub, echo, add, mut, slow, now).Start()
+	gorpc.NewServer(Plus, Sub, Echo, Add, Mut, Slow, Now).Start()
 }
 
-func plus(a, b int) int {
+func Plus(a, b int) int {
 	return a + b
 }
 
-func sub(a, b int) int {
+func Sub(a, b int) int {
 	return a - b
 }
 
-func echo(msg string) string {
+func Echo(msg string) string {
 	return msg
 }
 
-func add(a ...int) (c int) {
+func Add(a ...int) (c int) {
 	for i := 0; i < len(a); i++ {
 		c += a[i]
 	}
 	return c
 }
 
-func mut(a ...int) (c int) {
+func Mut(a ...int) (c int) {
 	c = 1
 	for i := 0; i < len(a); i++ {
 		c *= a[i]
@@ -37,11 +37,11 @@ func mut(a ...int) (c int) {
 	return c
 }
 
-func slow(msg string) string {
+func Slow(msg string) string {
 	time.Sleep(10 * time.Microsecond)
 	return msg
 }
 
-func now() time.Time {
+func Now() time.Time {
 	return time.Now()
 }

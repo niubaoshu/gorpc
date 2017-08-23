@@ -63,9 +63,17 @@ func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
 	if err != nil {
 		return err
 	}
+	max := 0
+	for i := 0; i < len(fids); i++ {
+		if max < fids[i] {
+			max = fids[i]
+		}
+	}
 	l, fns := len(c.fns), c.fns //0号位置不放内容
-	c.sms = make([]*safeMap, l+1)
+	c.sms = make([]*safeMap, max+1)
+	fmt.Println(c.names, fids, l, max)
 	for i := 0; i < l; i++ {
+		fmt.Println(i)
 		c.sms[fids[i]] = makefunc(fns[i], fids[i], rwc)
 	}
 	go c.receive()
