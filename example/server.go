@@ -1,13 +1,14 @@
 package main
 
 import (
+	"strings"
 	"time"
 
 	"github.com/niubaoshu/gorpc"
 )
 
 func main() {
-	gorpc.NewServer(Plus, Sub, Echo, Add, Mut, Slow, Now).Start()
+	gorpc.NewServer(Plus, Sub, Echo, Add, Mut, Slow, Now, Split).Start()
 }
 
 func Plus(a, b int) int {
@@ -44,4 +45,8 @@ func Slow(msg string) string {
 
 func Now() time.Time {
 	return time.Now()
+}
+
+func Split(str string) []string {
+	return strings.Split(str, ",")
 }

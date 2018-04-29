@@ -22,7 +22,7 @@ type (
 	}
 )
 
-const defaultaddr = ":3345"
+const defaultAddr = ":3345"
 
 // Start starts service
 
@@ -142,7 +142,7 @@ func NewServer(funcs ...interface{}) *server {
 	return &server{
 		funcSum:  l,
 		exitChan: make(chan struct{}),
-		addr:     defaultaddr,
+		addr:     defaultAddr,
 		fns:      fns,
 		fnames:   fnames,
 	}

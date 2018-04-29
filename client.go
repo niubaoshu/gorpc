@@ -71,9 +71,7 @@ func (c *Client) StartIO(rwc io.ReadWriteCloser) error {
 	}
 	l, fns := len(c.fns), c.fns //0号位置不放内容
 	c.sms = make([]*safeMap, max+1)
-	fmt.Println(c.names, fids, l, max)
 	for i := 0; i < l; i++ {
-		fmt.Println(i)
 		c.sms[fids[i]] = makefunc(fns[i], fids[i], rwc)
 	}
 	go c.receive()
@@ -98,7 +96,7 @@ func (c *Client) Dial(network, addr string) error {
 }
 
 func (c *Client) Start() error {
-	return c.DialTCP(defaultaddr)
+	return c.DialTCP(defaultAddr)
 }
 
 func (c *Client) loopRead(r io.Reader) {
@@ -165,7 +163,7 @@ func (c *Client) getFids(names []string) (fids []int, err error) {
 	tick := time.NewTicker(5 * time.Second)
 	select {
 	case pack := <-c.rchan:
-		gotiny.Decodes(pack[4:], &fids)
+		gotiny.Unmarshal(pack[4:], &fids)
 	case <-tick.C:
 		return nil, ErrTimeout
 	}

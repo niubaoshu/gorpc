@@ -4,37 +4,32 @@ import (
 	"fmt"
 	"time"
 
-	"log"
-
 	"github.com/niubaoshu/gorpc"
 )
 
 // 该文件是自动生成的（除了main函数），还没有实现
 func main() {
-	cli := gorpc.NewClient([]string{"Add", "Echo", "Mut", "Now", "Plus", "Sub"}, &add, &echo, &mut, &now, &plus, &sub)
-	err := cli.Start()
-	if err != nil {
-		log.Fatal(err)
-	}
-	start := time.Now()
-	for i := 0; i < 10; i++ {
-		fmt.Println(plus(i, i*i))
-		fmt.Println(sub(i, i*i))
-		fmt.Println(echo("sdfsdfsdf"))
-		fmt.Println(add(i))
-		fmt.Println(mut(i))
-		fmt.Println(now())
-	}
-	cli.Stop()
-	fmt.Println(time.Now().Sub(start))
+	gorpc.NewClient([]string{"Add", "Echo", "Mut", "Now", "Plus", "Split", "Sub"}, &add, &echo, &mut, &now, &plus, &split, &sub).Start()
+
+	fmt.Println(plus(1, 2))
+	fmt.Println(sub(4, 3))
+	fmt.Println(echo("sdfsdfsdf"))
+	fmt.Println(add(4))
+	fmt.Println(mut(5))
+	no := time.Now()
+	n, _ := now()
+	fmt.Println(add(1, 444, 3, 4, 56, 8, 7, 7, 222))
+	fmt.Println(no.Sub(n), time.Now().Sub(n))
+	fmt.Println(split("1ssss,,2,,4,5,6,77,"))
 }
 
 var (
-	plus func(int, int) (int, error)
-	sub  func(int, int) (int, error)
-	echo func(string) (string, error)
-	add  func(...int) (int, error)
-	mut  func(...int) (int, error)
-	slow func(string) (string, error)
-	now  func() (time.Time, error)
+	plus  func(int, int) (int, error)
+	sub   func(int, int) (int, error)
+	echo  func(string) (string, error)
+	add   func(...int) (int, error)
+	mut   func(...int) (int, error)
+	slow  func(string) (string, error)
+	now   func() (time.Time, error)
+	split func(string) ([]string, error)
 )
